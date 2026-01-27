@@ -237,6 +237,105 @@ def create_car_list_flex(cars, mode='view'):
             "contents": bubbles
         }
     )
+def get_car_by_id(car_db_id):
+    """取得指定 ID 的單一車輛資料"""
+    conn = sqlite3.connect(DB_NAME)
+    c = conn.cursor()
+    c.execute("SELECT id, name, mode, pid, plate, birthday FROM cars WHERE id=?", (car_db_id,))
+    row = c.fetchone()
+    conn.close()
+    
+    if row:
+        return {
+            "db_id": row[0],
+            "name": row[1],
+            "mode": "legal" if row[2] == "2" else "personal",
+            "id": row[3],      
+            "plate_no": row[4], 
+            "sub_id": row[4] if row[2] == "2" else row[5],
+            "display_id": row[3]
+        }
+    return None
+def create_car_selection_flex(cars):
+    """產生讓使用者選擇要查詢哪台車的 Flex Message"""
+    bubbles = []
+    
+    for car in cars:
+        type_text = "🏢 公司車" if car['mode'] == 'legal' else "🚗 個人車"
+        # 顯示車號或身分證
+        sub_text = car['plate_no'] if car['plate_no'] else car['id']
+
+        bubble = {
+            "type": "bubble",
+            "size": "micro",
+            "header": {
+                "type": "box",
+                "layout": "vertical",
+                "contents": [
+                    {"type": "text", "text": car['name'], "weight": "bold", "color": "#1DB446", "size": "sm"},
+                    {"type": "text", "text": type_text, "size": "xxs", "color": "#aaaaaa"}
+                ],
+                "backgroundColor": "#f0f0f0",
+                "paddingAll": "8px"
+            },
+            "body": {
+                "type": "box",
+                "layout": "vertical",
+                "contents": [
+                    {"type": "text", "text": sub_text, "size": "xs", "align": "center", "weight": "bold"}
+                ],
+                "paddingAll": "10px"
+            },
+            "footer": {
+                "type": "box",
+                "layout": "vertical",
+                "contents": [
+                    {
+                        "type": "button",
+                        "style": "primary",
+                        "height": "sm",
+                        "color": "#007bff",
+                        "action": {
+                            "type": "postback",
+                            "label": "查詢此車",
+                            # 將 action 設為 check_one_car，並帶上 car_id
+                            "data": f"action=check_one_car&car_id={car['db_id']}",
+                            "displayText": f"🔍 正在查詢 {car['name']}..."
+                        }
+                    }
+                ],
+                "paddingAll": "5px"
+            }
+        }
+        bubbles.append(bubble)
+
+    return FlexSendMessage(
+        alt_text="請選擇要查詢的車輛",
+        contents={
+            "type": "carousel",
+            "contents": bubbles
+        }
+    )
+def send_loading_animation(user_id, duration=20):
+    """
+    顯示 LINE 聊天室的 Loading 動畫
+    user_id: 使用者 ID
+    duration: 動畫持續秒數 (預設 20秒，最長 60秒)
+    """
+    url = "https://api.line.me/v2/bot/chat/loading/start"
+    headers = {
+        "Content-Type": "application/json",
+        "Authorization": f"Bearer {LINE_CHANNEL_ACCESS_TOKEN}"
+    }
+    data = {
+        "chatId": user_id,
+        "loadingSeconds": duration
+    }
+    try:
+        # 使用 requests 直接呼叫，因為 line-bot-sdk v2 舊版可能還沒包裝這個功能
+        requests.post(url, headers=headers, json=data)
+    except Exception as e:
+        print(f"Loading 動畫發送失敗: {e}")
 # ==========================================
 # 🎫 選號查詢爬蟲
 # ==========================================
@@ -244,7 +343,7 @@ def crawl_plate_numbers():
     print("🚀 啟動選號爬蟲測試...")
     
     # 測試時建議設為 False，看得到畫面比較好 debug
-    driver = new_chrome(headless=True) 
+    driver = new_chrome(headless=False) 
     plates = []
     url = "https://www.mvdis.gov.tw/m3-emv-plate/webpickno/queryPickNo#"
 
@@ -478,7 +577,7 @@ init_db()
 # ==========================================
 # 🕷️ 爬蟲工具 (維持不變)
 # ==========================================
-def new_chrome(headless=True) -> webdriver.Chrome:
+def new_chrome(headless=False) -> webdriver.Chrome:
     options = ChromeOptions()
     if headless: options.add_argument("--headless=new")
     options.add_argument("--user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36")
@@ -763,7 +862,7 @@ def upload_to_imgbb(base64_str):
     if not base64_str: return None
     url = "https://api.imgbb.com/1/upload"
     if "," in base64_str: base64_str = base64_str.split(",")[1]
-    payload = {"key": IMGBB_API_KEY, "image": base64_str, "expiration": 86400}
+    payload = {"key": IMGBB_API_KEY, "image": base64_str, "expiration": 604800}
     try:
         response = requests.post(url, data=payload)
         if response.status_code == 200:
@@ -849,27 +948,24 @@ def create_fine_flex_message(record_data, id_number):
 # ==========================================
 # 🚀 爬蟲主流程 (修改版：強制回報結果)
 # ==========================================
-def process_crawling_for_user(user_id, car_list, is_auto_schedule=False):
+def process_crawling_for_user(user_id, car_list, reply_token, is_auto_schedule=False):
     """
     執行爬蟲
-    is_auto_schedule: True 代表是排程觸發
+    reply_token: 用來回覆訊息的 token (手動查詢時必填)
+    is_auto_schedule: True 代表是排程觸發 (排程時沒有 reply_token，仍需使用 push)
     """
     print(f"啟動爬蟲，目標: {user_id}, 模式: {'自動排程' if is_auto_schedule else '手動查詢'}")
-    driver = new_chrome(headless=True)
+    if not is_auto_schedule:
+        send_loading_animation(user_id, duration=60)
+    driver = new_chrome(headless=False)
     
-    # 紀錄查詢結果
-    results = [] 
-    
-    try:
-        # 如果是手動查詢，先傳個訊息說開始了
-        if not is_auto_schedule:
-            line_bot_api.push_message(user_id, TextSendMessage(text=f"🔍 開始查詢 {len(car_list)} 台車輛..."))
+    # 收集所有要發送的訊息物件
+    messages_to_send = []
+    results_text = [] # 用來存純文字結果
 
+    try:
+        # 爬蟲邏輯 (與原本相同，但不再中途 push 訊息)
         for car in car_list:
-            if not is_auto_schedule:
-                line_bot_api.push_message(user_id, TextSendMessage(text=f"🚗 查詢中：{car['name']}"))
-            
-            # --- 爬蟲邏輯 ---
             try:
                 driver.get(MV_DIS_URL)
                 max_retries = 3
@@ -895,22 +991,20 @@ def process_crawling_for_user(user_id, car_list, is_auto_schedule=False):
                             
                         # 狀況 1: 無違規
                         if "查無" in driver.page_source and "資料" in driver.page_source:
-                            results.append(f"✅ {car['name']}：無違規")
+                            results_text.append(f"✅ {car['name']}：無違規")
                             success = True
                             break
                             
                         # 狀況 2: 有違規
                         records = get_all_pages_data(driver)
                         if records:
-                            # 直接發送罰單卡片
-                            line_bot_api.push_message(user_id, TextSendMessage(text=f"🚨 {car['name']}：發現 {len(records)} 筆罰單！"))
+                            results_text.append(f"🚨 {car['name']}：發現 {len(records)} 筆罰單！")
+                            # 建立罰單卡片並加入待發送清單
                             for record in records:
                                 try:
                                     flex_msg = create_fine_flex_message(record, car['id'])
-                                    line_bot_api.push_message(user_id, flex_msg)
+                                    messages_to_send.append(flex_msg)
                                 except: pass
-                            
-                            results.append(f"🚨 {car['name']}：有 {len(records)} 筆罰單")
                             success = True
                             break
                         
@@ -921,17 +1015,44 @@ def process_crawling_for_user(user_id, car_list, is_auto_schedule=False):
                         driver.refresh()
                 
                 if not success:
-                    results.append(f"⚠️ {car['name']}：查詢失敗")
+                    results_text.append(f"⚠️ {car['name']}：查詢失敗")
                     
             except Exception as e:
                 print(f"單一車輛錯誤: {e}")
         
-        # === 關鍵修改：無論有無罰單，最後都傳送總結報告 ===
-        summary_text = "📅 定期檢查報告：\n" + "\n".join(results)
-        line_bot_api.push_message(user_id, TextSendMessage(text=summary_text))
+        # === 建立總結訊息 ===
+        summary_text = "📅 查詢報告：\n" + "\n".join(results_text)
+        
+        # 將總結文字放在最前面
+        messages_to_send.insert(0, TextSendMessage(text=summary_text))
+        
+        # 限制一次最多發送 5 則訊息 (Line API 限制)
+        # 如果罰單太多，我們只傳前 4 張 + 總結
+        if len(messages_to_send) > 5:
+            messages_to_send = messages_to_send[:5]
+            messages_to_send.append(TextSendMessage(text="⚠️ 罰單較多，僅顯示前幾筆，請至監理站查詢完整內容。"))
+
+        # === 發送訊息 ===
+        if is_auto_schedule:
+            # 排程模式：還是得用 push，因為沒有 reply_token
+            # 但排程通常一天才一次，應該還好
+            for msg in messages_to_send:
+                line_bot_api.push_message(user_id, msg)
+        else:
+            # 手動模式：使用 reply_message (免費！)
+            # 注意：這裡假設爬蟲能在 30-60 秒內跑完，否則 Token 會過期
+            if reply_token:
+                line_bot_api.reply_message(reply_token, messages_to_send)
+            else:
+                print("錯誤：手動模式但沒有 reply_token")
 
     except Exception as e:
-        print(f"瀏覽器錯誤: {e}")
+        print(f"瀏覽器或發送錯誤: {e}")
+        # 如果出錯，嘗試回傳錯誤訊息 (如果 Token 還沒過期)
+        if not is_auto_schedule and reply_token:
+            try:
+                line_bot_api.reply_message(reply_token, TextSendMessage(text="❌ 查詢發生錯誤或逾時，請稍後再試。"))
+            except: pass
     finally:
         driver.quit()
 
@@ -1064,41 +1185,45 @@ cancel_menu = QuickReply(
     ]
 )
 
-def run_plate_crawler(user_id):
+def run_plate_crawler(user_id, reply_token):
     """
-    執行選號爬蟲並分批推播 Flex 結果
+    執行選號爬蟲並分批推播 Flex 結果 (改用 Reply)
     """
+    send_loading_animation(user_id, duration=60)
     plates = crawl_plate_numbers()
     
     if not plates:
-        line_bot_api.push_message(user_id, TextSendMessage(text="⚠️ 查詢失敗或目前無可選號碼 (驗證碼錯誤或無資料)。"))
+        # 失敗時用 Reply
+        line_bot_api.reply_message(reply_token, TextSendMessage(text="⚠️ 查詢失敗或目前無可選號碼 (驗證碼錯誤或無資料)。"))
         return
 
     try:
-        # 計算總數
         total = len(plates)
-        
-        # 限制：一個 Flex Carousel 最多 10-12 個 Bubbles
-        # 每個 Bubble 我們設定放 30 個號碼
-        # 所以一個 Carousel 訊息最多大概能放 300 個號碼
-        # 我們以 300 為單位切分訊息
         msg_batch_size = 300
-        
-        # 將所有車牌切成大區塊 (每個區塊發送一則 LINE 訊息)
         message_batches = [plates[i:i + msg_batch_size] for i in range(0, len(plates), msg_batch_size)]
         
-        line_bot_api.push_message(user_id, TextSendMessage(text=f"🔍 查詢完成，共 {total} 筆資料，將分 {len(message_batches)} 則訊息傳送..."))
-
+        # 準備要發送的訊息列表
+        messages_to_send = []
+        
+        # 第一則：文字統計
+        messages_to_send.append(TextSendMessage(text=f"🔍 查詢完成，共 {total} 筆資料..."))
+        
+        # 後續：Flex Carousel
+        # 注意：Reply 一次最多 5 則訊息
         for index, batch in enumerate(message_batches):
+            if len(messages_to_send) >= 5:
+                break # 超過限制，停止加入
             flex_message = create_plate_flex(batch, index + 1, total)
-            line_bot_api.push_message(user_id, flex_message)
-            time.sleep(0.5) # 避免發送太快
+            messages_to_send.append(flex_message)
+
+        # 一次性發送
+        line_bot_api.reply_message(reply_token, messages_to_send)
             
     except Exception as e:
         print(f"發送 Flex 失敗: {e}")
-        # 如果真的還是失敗，回傳文字檔
-        err_msg = f"⚠️ 顯示錯誤 (資料量過大)，顯示前 50 筆：\n" + ", ".join(plates[:50])
-        line_bot_api.push_message(user_id, TextSendMessage(text=err_msg))
+        try:
+            line_bot_api.reply_message(reply_token, TextSendMessage(text="⚠️ 發生錯誤，無法顯示結果。"))
+        except: pass
 
 @handler.add(MessageEvent, message=TextMessage)
 def handle_message(event):
@@ -1286,13 +1411,23 @@ def handle_message(event):
             TextSendMessage(text="請輸入這台車的「暱稱」\n(例如：公司貨車)：", quick_reply=cancel_menu)
         )
 
-    # --- 3. 罰單查詢 ---
+    # --- 3. 罰單查詢 (修改後) ---
     elif msg == "罰單查詢":
         cars = get_user_cars(user_id)
         if not cars:
             line_bot_api.reply_message(event.reply_token, TextSendMessage(text="⚠️ 請先綁定車輛。"))
             return
-        threading.Thread(target=process_crawling_for_user, args=(user_id, cars, False)).start()
+        
+        # 產生選擇卡片
+        flex_msg = create_car_selection_flex(cars)
+        
+        line_bot_api.reply_message(
+            event.reply_token, 
+            [
+                TextSendMessage(text="請選擇要查詢哪一台車輛？"),
+                flex_msg
+            ]
+        )
 
     elif msg == "查詢車輛" or msg == "查詢設定":
         cars = get_user_cars(user_id)
@@ -1386,10 +1521,44 @@ def handle_message(event):
     
     # --- [新增] 選號查詢 ---
     elif msg == "選號":
-        line_bot_api.reply_message(event.reply_token, TextSendMessage(text="🔍 正在前往監理站查詢最新選號資料，請稍候約 10-20 秒..."))
-        
-        # 開新執行緒跑爬蟲
-        threading.Thread(target=run_plate_crawler, args=(user_id,)).start()
+        # 這裡也是，不能先回「查詢中」，因為 Reply 只能用一次
+        # 所以使用者按下去後，會沒有反應約 10-20 秒，然後直接跳結果
+        send_loading_animation(user_id, duration=60)
+        threading.Thread(target=run_plate_crawler, args=(user_id, event.reply_token)).start()
+    
+    elif msg == "備份資料庫":
+        if user_id != "Uc033d76e142adb971941e27cd685856f": # 記得換成你自己的 ID
+            return
+
+        try:
+            import requests
+            
+            # 使用 transfer.sh 服務
+            # 注意：這裡使用 put 方法
+            with open(DB_NAME, 'rb') as f:
+                # upload_file = {'file': f} 
+                # transfer.sh 的格式比較單純，直接 put 檔案內容即可，或使用 files 參數
+                
+                # 為了穩定，我們用標準的 files 上傳方式
+                files = {'file': (DB_NAME, f)}
+                response = requests.post('https://transfer.sh/', files=files)
+            
+            # transfer.sh 成功的話會直接回傳網址 (純文字)，不是 JSON
+            if response.status_code == 200:
+                download_link = response.text.strip() # 取得網址
+                
+                line_bot_api.reply_message(
+                    event.reply_token, 
+                    TextSendMessage(text=f"📦 資料庫備份成功！(保存14天)\n\n{download_link}")
+                )
+            else:
+                line_bot_api.reply_message(
+                    event.reply_token, 
+                    TextSendMessage(text=f"❌ 上傳失敗，狀態碼: {response.status_code}")
+                )
+
+        except Exception as e:
+            line_bot_api.reply_message(event.reply_token, TextSendMessage(text=f"❌ 備份錯誤: {e}"))
 @handler.add(PostbackEvent)
 def handle_postback(event):
     user_id = event.source.user_id
@@ -1407,5 +1576,24 @@ def handle_postback(event):
             line_bot_api.reply_message(event.reply_token, TextSendMessage(text=f"🗑️ 已刪除車輛：{car_name}"))
         else:
             line_bot_api.reply_message(event.reply_token, TextSendMessage(text="❌ 刪除失敗，找不到該車輛資料。"))
+    # === [新增] 單一車輛查詢邏輯 ===
+    elif action == 'check_one_car':
+        car_id = params.get('car_id', [''])[0]
+        
+        # 從資料庫撈出那台車的詳細資料
+        target_car = get_car_by_id(car_id)
+        
+        if target_car:
+            # 啟動執行緒跑爬蟲
+            # 注意：process_crawling_for_user 接受的是 list，所以要包成 [target_car]
+            threading.Thread(
+                target=process_crawling_for_user, 
+                args=(user_id, [target_car], event.reply_token, False)
+            ).start()
+        else:
+            line_bot_api.reply_message(
+                event.reply_token, 
+                TextSendMessage(text="❌ 找不到該車輛資料，可能已被刪除。")
+            )
 if __name__ == "__main__":
     app.run(port=5000)
