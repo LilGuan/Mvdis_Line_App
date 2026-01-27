@@ -343,7 +343,7 @@ def crawl_plate_numbers():
     print("🚀 啟動選號爬蟲測試...")
     
     # 測試時建議設為 False，看得到畫面比較好 debug
-    driver = new_chrome(headless=False) 
+    driver = new_chrome(headless=True) 
     plates = []
     url = "https://www.mvdis.gov.tw/m3-emv-plate/webpickno/queryPickNo#"
 
@@ -577,7 +577,7 @@ init_db()
 # ==========================================
 # 🕷️ 爬蟲工具 (維持不變)
 # ==========================================
-def new_chrome(headless=False) -> webdriver.Chrome:
+def new_chrome(headless=True) -> webdriver.Chrome:
     options = ChromeOptions()
     if headless: options.add_argument("--headless=new")
     options.add_argument("--user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36")
@@ -957,7 +957,7 @@ def process_crawling_for_user(user_id, car_list, reply_token, is_auto_schedule=F
     print(f"啟動爬蟲，目標: {user_id}, 模式: {'自動排程' if is_auto_schedule else '手動查詢'}")
     if not is_auto_schedule:
         send_loading_animation(user_id, duration=60)
-    driver = new_chrome(headless=False)
+    driver = new_chrome(headless=True)
     
     # 收集所有要發送的訊息物件
     messages_to_send = []
@@ -1596,4 +1596,4 @@ def handle_postback(event):
                 TextSendMessage(text="❌ 找不到該車輛資料，可能已被刪除。")
             )
 if __name__ == "__main__":
-    app.run(port=5000)
+    app.run(host='0.0.0.0', port=5000)
