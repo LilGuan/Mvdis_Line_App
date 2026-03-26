@@ -1,0 +1,230 @@
+{
+  "activity": [
+    {
+      "bounds": {
+        "x": 0,
+        "y": 0,
+        "width": 833,
+        "height": 190
+      },
+      "action": {
+        "type": "postback",
+        "data": "noop=activity"
+      }
+    },
+    {
+      "bounds": {
+        "x": 833,
+        "y": 0,
+        "width": 834,
+        "height": 190
+      },
+      "action": {
+        "type": "richmenuswitch",
+        "richMenuAliasId": "menu-query",
+        "data": "action=switch_query"
+      }
+    },
+    {
+      "bounds": {
+        "x": 1667,
+        "y": 0,
+        "width": 833,
+        "height": 190
+      },
+      "action": {
+        "type": "richmenuswitch",
+        "richMenuAliasId": "menu-points",
+        "data": "action=switch_points"
+      }
+    },
+    {
+      "bounds": {
+        "x": 70,
+        "y": 690,
+        "width": 760,
+        "height": 780
+      },
+      "action": {
+        "type": "uri",
+        "uri": "https://example.com/activity-1"
+      }
+    },
+    {
+      "bounds": {
+        "x": 870,
+        "y": 690,
+        "width": 760,
+        "height": 780
+      },
+      "action": {
+        "type": "uri",
+        "uri": "https://example.com/activity-2"
+      }
+    },
+    {
+      "bounds": {
+        "x": 1670,
+        "y": 690,
+        "width": 760,
+        "height": 780
+      },
+      "action": {
+        "type": "uri",
+        "uri": "https://example.com/activity-3"
+      }
+    }
+  ],
+  "query": [
+    {
+      "bounds": {
+        "x": 0,
+        "y": 0,
+        "width": 833,
+        "height": 190
+      },
+      "action": {
+        "type": "richmenuswitch",
+        "richMenuAliasId": "menu-activity",
+        "data": "action=switch_activity"
+      }
+    },
+    {
+      "bounds": {
+        "x": 833,
+        "y": 0,
+        "width": 834,
+        "height": 190
+      },
+      "action": {
+        "type": "postback",
+        "data": "noop=query"
+      }
+    },
+    {
+      "bounds": {
+        "x": 1667,
+        "y": 0,
+        "width": 833,
+        "height": 190
+      },
+      "action": {
+        "type": "richmenuswitch",
+        "richMenuAliasId": "menu-points",
+        "data": "action=switch_points"
+      }
+    },
+    {
+      "bounds": {
+        "x": 70,
+        "y": 690,
+        "width": 760,
+        "height": 780
+      },
+      "action": {
+        "type": "uri",
+        "uri": "https://example.com/faq"
+      }
+    },
+    {
+      "bounds": {
+        "x": 870,
+        "y": 690,
+        "width": 760,
+        "height": 780
+      },
+      "action": {
+        "type": "uri",
+        "uri": "https://example.com/report-issue"
+      }
+    },
+    {
+      "bounds": {
+        "x": 1670,
+        "y": 690,
+        "width": 760,
+        "height": 780
+      },
+      "action": {
+        "type": "uri",
+        "uri": "https://example.com/contact-us"
+      }
+    }
+  ],
+  "points": [
+    {
+      "bounds": {
+        "x": 0,
+        "y": 0,
+        "width": 833,
+        "height": 190
+      },
+      "action": {
+        "type": "richmenuswitch",
+        "richMenuAliasId": "menu-activity",
+        "data": "action=switch_activity"
+      }
+    },
+    {
+      "bounds": {
+        "x": 833,
+        "y": 0,
+        "width": 834,
+        "height": 190
+      },
+      "action": {
+        "type": "richmenuswitch",
+        "richMenuAliasId": "menu-query",
+        "data": "action=switch_query"
+      }
+    },
+    {
+      "bounds": {
+        "x": 1667,
+        "y": 0,
+        "width": 833,
+        "height": 190
+      },
+      "action": {
+        "type": "postback",
+        "data": "noop=points"
+      }
+    },
+    {
+      "bounds": {
+        "x": 70,
+        "y": 690,
+        "width": 760,
+        "height": 780
+      },
+      "action": {
+        "type": "uri",
+        "uri": "https://example.com/points-balance"
+      }
+    },
+    {
+      "bounds": {
+        "x": 870,
+        "y": 690,
+        "width": 760,
+        "height": 780
+      },
+      "action": {
+        "type": "uri",
+        "uri": "https://example.com/redeem"
+      }
+    },
+    {
+      "bounds": {
+        "x": 1670,
+        "y": 690,
+        "width": 760,
+        "height": 780
+      },
+      "action": {
+        "type": "uri",
+        "uri": "https://example.com/points-history"
+      }
+    }
+  ]
+}

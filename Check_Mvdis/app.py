@@ -6,7 +6,11 @@ import sqlite3
 import threading
 import requests
 import base64
+from linebot.models import LocationAction
 import urllib3
+from linebot.models import *
+from geopy.distance import geodesic
+from selenium.webdriver.chrome.options import Options
 from selenium.webdriver.support.ui import Select
 import datetime
 from linebot.models import PostbackAction
@@ -45,7 +49,7 @@ IMGBB_API_KEY = 'db7c5f15e2e4e1d49ba2c216afd94bd5'
 LINE_CHANNEL_SECRET = '06b0ec3c7c42162197cf6c7e17b1eddd'
 
 # 預設圖片 (當沒有罰單照片時顯示)
-DEFAULT_HERO_IMAGE='https://i.ibb.co/DmpPQ2q/69ec183b-3e6e-4b50-bbd9-55d2ba5ac572.jpg'  # 預設卡片圖片 (沒有罰單照片時使用) 
+DEFAULT_HERO_IMAGE='https://i.ibb.co/mV5wt91s/3c458c36-474e-460b-8d92-39d5abf25305.png'  # 預設卡片圖片 (沒有罰單照片時使用) 
 # 監理站網址
 MV_DIS_URL = "https://www.mvdis.gov.tw/m3-emv-vil/vil/penaltyQueryPay"
 # 資料庫名稱
@@ -54,7 +58,9 @@ DB_NAME = "users_cars.db"
 app = Flask(__name__)
 line_bot_api = LineBotApi(LINE_CHANNEL_ACCESS_TOKEN)
 handler = WebhookHandler(LINE_CHANNEL_SECRET)
-
+# --- 新增：載入停車場資料 ---
+with open('parking_data.json', 'r', encoding='utf-8') as f:
+    parking_lots = json.load(f)
 # ==========================================
 # 🗄️ 資料庫管理 (新增 Schedules 表)
 # ==========================================
@@ -353,7 +359,7 @@ def crawl_plate_numbers():
 
         # ===========================================
         # 0. 處理「接受」按鈕 (新增部分)
-        # ===========================================
+        # ===｀========================================
         try: 
             print("0. 正在點擊「接受」按鈕...")
             # 等待按鈕出現並可點擊
@@ -577,8 +583,9 @@ init_db()
 # ==========================================
 # 🕷️ 爬蟲工具 (維持不變)
 # ==========================================
+
 def new_chrome(headless=True) -> webdriver.Chrome:
-    options = ChromeOptions()
+    options = Options()
     if headless: options.add_argument("--headless=new")
     options.add_argument("--user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36")
     options.add_argument("--no-sandbox")
@@ -587,7 +594,7 @@ def new_chrome(headless=True) -> webdriver.Chrome:
     options.add_argument("--disable-gpu")
     options.add_argument("--ignore-certificate-errors")
     service = Service(ChromeDriverManager().install())
-    return webdriver.Chrome(service=service, options=options)
+    return webdriver.Chrome(options=options)
 
 def safe_click(driver, locator, timeout=10):
     wait = WebDriverWait(driver, timeout)
@@ -945,9 +952,6 @@ def create_fine_flex_message(record_data, id_number):
 # ==========================================
 # 🚀 爬蟲主流程
 # ==========================================
-# ==========================================
-# 🚀 爬蟲主流程 (修改版：強制回報結果)
-# ==========================================
 def process_crawling_for_user(user_id, car_list, reply_token, is_auto_schedule=False):
     """
     執行爬蟲
@@ -1065,57 +1069,59 @@ def schedule_checker():
     
     while True:
         try:
-            # 1. 強制設定為台灣時間 (UTC+8)
+            # 1. 設定台灣時間
             taiwan_time = datetime.datetime.utcnow() + datetime.timedelta(hours=8)
-            current_time_str = taiwan_time.strftime("%H:%M") # 例如 "16:30"
+            current_time_str = taiwan_time.strftime("%H:%M") 
             today_str = taiwan_time.strftime("%Y-%m-%d")
             
-            # 2. 印出 Log 確認程式還活著 (Debug 用)
-            # 這樣你從終端機就能看到它現在認為幾點
-            print(f"[系統檢查] 台灣時間: {current_time_str} | 檢查排程中...")
+            # 取得今天是星期幾 (0=週一, 1=週二 ... 6=週日)
+            current_weekday = taiwan_time.weekday()
 
-            schedules = get_all_schedules() # [(line_id, type, value, last_run), ...]
+            schedules = get_all_schedules() 
             
             for row in schedules:
                 user_id, s_type, value, last_run = row
                 should_run = False
                 
-                # --- 每天模式 ---
+                # --- A. 每天模式 ---
                 if s_type == 'daily':
-                    # 條件：時間到了 AND (上次執行不是今天 OR 還沒執行過)
                     if current_time_str == value and last_run != today_str:
                         should_run = True
-                        
-                # --- 間隔模式 (每 N 天) ---
+                
+                # --- B. [新增] 每週模式 ---
+                elif s_type == 'weekly':
+                    # 條件：
+                    # 1. 今天星期幾 == 設定的星期幾 (value='0' 代表週一)
+                    # 2. 時間是 09:00 (這裡固定寫死，或你也可以存進資料庫)
+                    # 3. 今天還沒跑過
+                    if str(current_weekday) == value and current_time_str == "09:00" and last_run != today_str:
+                        should_run = True
+
+                # --- C. 間隔模式 (每 N 天) ---
                 elif s_type == 'interval':
                     try:
-                        # 計算日期差距
-                        last_run_date = datetime.datetime.strptime(last_run, "%Y-%m-%d").date()
+                        if not last_run:
+                            last_run_date = (taiwan_time - datetime.timedelta(days=int(value)+1)).date()
+                        else:
+                            last_run_date = datetime.datetime.strptime(last_run, "%Y-%m-%d").date()
+                            
                         current_date = taiwan_time.date()
                         days_diff = (current_date - last_run_date).days
                         
-                        # 條件：距離上次執行 >= 設定天數
-                        # 且 為了避免半夜一直跑，我們固定在早上 09:00 執行間隔任務
-                        # (你可以改掉 "09:00" 成你想要的時間)
-                        if days_diff >= int(value) and current_time_str == "09:00":
+                        if days_diff >= int(value) and current_time_str == "09:00" and last_run != today_str:
                             should_run = True
                     except Exception as e:
-                        print(f"日期計算錯誤 (將重置): {e}")
-                        should_run = True # 出錯就跑一次當作重置
+                        print(f"日期計算錯誤: {e}")
 
                 # --- 觸發執行 ---
                 if should_run:
                     print(f"👉 觸發排程！對象: {user_id}, 類型: {s_type}")
-                    cars = get_user_cars(user_id)
-                    
-                    # 更新上次執行日期為「今天」
                     update_last_run(user_id)
-                    
+                    cars = get_user_cars(user_id)
                     if cars:
-                        # 執行爬蟲 (is_auto_schedule=True 代表沒罰單不通知)
-                        threading.Thread(target=process_crawling_for_user, args=(user_id, cars, True)).start()
+                        # 記得這理參數要傳 4 個: user_id, cars, reply_token(None), is_auto(True)
+                        threading.Thread(target=process_crawling_for_user, args=(user_id, cars, None, True)).start()
             
-            # 休息 60 秒
             time.sleep(60)
             
         except Exception as e:
@@ -1437,12 +1443,22 @@ def handle_message(event):
             # 顯示車輛卡片 (檢視模式)
             flex_msg = create_car_list_flex(cars, mode='view')
             
-            # 順便顯示排程資訊
+            # --- [修改] 顯示排程資訊邏輯 ---
             sched = get_schedule(user_id)
             sched_info = "無自動排程"
+            
             if sched:
                 s_type, s_val = sched
-                sched_info = f"每天 {s_val}" if s_type == 'daily' else f"每 {s_val} 天"
+                if s_type == 'daily':
+                    sched_info = f"每天 {s_val} 自動查詢"
+                elif s_type == 'interval':
+                    sched_info = f"每 {s_val} 天 自動查詢"
+                elif s_type == 'weekly':
+                    # 轉換數字為中文 (0=週一)
+                    days_map = {'0': '一', '1': '二', '2': '三', '3': '四', '4': '五', '5': '六', '6': '日'}
+                    day_str = days_map.get(str(s_val), str(s_val))
+                    sched_info = f"每週{day_str} 09:00 自動查詢"
+            # ---------------------------
                 
             line_bot_api.reply_message(event.reply_token, [
                 TextSendMessage(text=f"📋 目前排程設定：{sched_info}"),
@@ -1457,10 +1473,8 @@ def handle_message(event):
             return
 
         quick_reply = QuickReply(items=[
-            QuickReplyButton(action=MessageAction(label="每天 09:00", text="每天 09:00")),
-            QuickReplyButton(action=MessageAction(label="每天 12:00", text="每天 12:00")),
+            QuickReplyButton(action=MessageAction(label="每週一 09:00", text="每週一 09:00")),
             QuickReplyButton(action=MessageAction(label="每 3 天", text="每 3 天")),
-            QuickReplyButton(action=MessageAction(label="每 7 天", text="每 7 天")),
             QuickReplyButton(action=MessageAction(label="❌ 取消排程", text="取消排程"))
         ])
         line_bot_api.reply_message(event.reply_token, TextSendMessage(
@@ -1468,27 +1482,38 @@ def handle_message(event):
             quick_reply=quick_reply
         ))
 
-    elif msg.startswith("每天 ") or (msg.startswith("每 ") and "天" in msg):
+    elif msg.startswith("每天 ") or (msg.startswith("每 ") and "天" in msg) or msg == "每週一 09:00":
         # 檢查是否有車輛
         if not get_user_cars(user_id):
             line_bot_api.reply_message(event.reply_token, TextSendMessage(text="⚠️ 請先綁定車輛。"))
             return
 
         try:
+            user_name = get_line_user_name(user_id) 
+
+            # A. 每天模式
             if msg.startswith("每天"):
                 time_val = msg.split()[1]
-                datetime.datetime.strptime(time_val, "%H:%M")
-                user_name = get_line_user_name(user_id)
+                datetime.datetime.strptime(time_val, "%H:%M") # 檢查時間格式
                 set_schedule(user_id, 'daily', time_val, user_name)
                 reply = f"⏰ 已設定：每天 {time_val} 自動查詢。"
+            
+            # B. [新增] 每週模式
+            elif msg == "每週一 09:00":
+                # value 存 '0' 代表星期一 (Python 的 weekday: 0=週一, 6=週日)
+                set_schedule(user_id, 'weekly', '0', user_name)
+                reply = "🗓️ 已設定：每週一 早上 09:00 自動查詢。"
+
+            # C. 間隔模式 (每 N 天)
             else:
                 days = re.findall(r'\d+', msg)[0]
-                set_schedule(user_id, 'interval', days)
-                reply = f"🗓️ 已設定：每 {days} 天自動查詢一次。"
+                set_schedule(user_id, 'interval', days, user_name)
+                reply = f"🗓️ 已設定：每 {days} 天自動查詢一次 (固定早上 09:00 執行)。"
             
             line_bot_api.reply_message(event.reply_token, TextSendMessage(text=reply))
-        except:
-            line_bot_api.reply_message(event.reply_token, TextSendMessage(text="❌ 格式錯誤，請重試。"))
+        except Exception as e:
+            print(f"設定排程錯誤: {e}")
+            line_bot_api.reply_message(event.reply_token, TextSendMessage(text="❌ 格式錯誤或系統異常，請重試。"))
 
     elif msg == "取消排程":
         delete_schedule(user_id)
@@ -1526,6 +1551,23 @@ def handle_message(event):
         send_loading_animation(user_id, duration=60)
         threading.Thread(target=run_plate_crawler, args=(user_id, event.reply_token)).start()
     
+    elif msg == "計程車免費車位查詢":
+        reply_msg = TextSendMessage(
+            text="請點下方按鈕傳送您的位置，我幫您查詢附近的計程車免費車位。",
+            quick_reply=QuickReply(
+                items=[
+                    QuickReplyButton(
+                        action=LocationAction(label="📍 傳送位置")
+                    ),
+                    QuickReplyButton(
+                        action=MessageAction(label="❌ 取消", text="取消")
+                    )
+                ]
+            )
+        )
+        line_bot_api.reply_message(event.reply_token, reply_msg)
+        return
+
     elif msg == "備份資料庫":
         if user_id != "Uc033d76e142adb971941e27cd685856f": # 記得換成你自己的 ID
             return
@@ -1595,5 +1637,152 @@ def handle_postback(event):
                 event.reply_token, 
                 TextSendMessage(text="❌ 找不到該車輛資料，可能已被刪除。")
             )
+@handler.add(MessageEvent, message=LocationMessage)
+def handle_location(event):
+    user_lat = event.message.latitude
+    user_lng = event.message.longitude
+    user_pos = (user_lat, user_lng)
+
+    # 計算距離並排序
+    for lot in parking_lots:
+        lot_pos = (lot['lat'], lot['lng'])
+        lot['distance'] = round(geodesic(user_pos, lot_pos).km, 2)
+
+    # 取最近的 5 筆
+    nearby_lots = sorted(parking_lots, key=lambda x: x['distance'])[:5]
+
+    # 建立 Flex Message 氣泡清單
+    bubbles = []
+    for lot in nearby_lots:
+        contents = [
+            {
+                "type": "text",
+                "text": lot['name'],
+                "weight": "bold",
+                "size": "sm",
+                "wrap": True
+            },
+            {
+                "type": "text",
+                "text": f"距離: {lot['distance']} km",
+                "size": "xs",
+                "color": "#ff5551"
+            },
+            {
+                "type": "text",
+                "text": f"📍 {lot['address']}",
+                "size": "xxs",
+                "color": "#aaaaaa",
+                "wrap": True
+            },
+            {
+                "type": "separator",
+                "margin": "md"
+            }
+        ]
+
+        has_free_30m = lot.get('free_30m', False)
+        has_free_1h = lot.get('free_1h', False)
+        has_free_2h = lot.get('free_2h', False)
+        has_free_4h = lot.get('free_4h', False)
+        has_noon_2h = lot.get('noon_2h', False)
+
+        # 只有「只有 30 分鐘免費」時才顯示
+        only_free_30m = (
+            has_free_30m
+            and not has_free_1h
+            and not has_free_2h
+            and not has_free_4h
+            and not has_noon_2h
+        )
+
+        if only_free_30m:
+            contents.append({
+                "type": "text",
+                "text": "✅ 未滿30分鐘免費",
+                "size": "xs",
+                "margin": "md",
+                "color": "#00b900"
+            })
+
+        if has_free_1h:
+            contents.append({
+                "type": "text",
+                "text": "✅ 1小時免費",
+                "size": "xs",
+                "margin": "md" if not only_free_30m else "none",
+                "color": "#00b900"
+            })
+
+        if has_free_2h:
+            contents.append({
+                "type": "text",
+                "text": "✅ 2小時免費",
+                "size": "xs",
+                "margin": "md" if not only_free_30m and not has_free_1h else "none",
+                "color": "#00b900"
+            })
+
+        if has_free_4h:
+            contents.append({
+                "type": "text",
+                "text": "✅ 4小時免費",
+                "size": "xs",
+                "margin": "md" if not only_free_30m and not has_free_1h and not has_free_2h else "none",
+                "color": "#00b900"
+            })
+
+        if has_noon_2h:
+            contents.append({
+                "type": "text",
+                "text": "✅ 中午免費2小時",
+                "size": "xs",
+                "margin": "md" if not only_free_30m and not has_free_1h and not has_free_2h and not has_free_4h else "none",
+                "color": "#00b900"
+            })
+
+        # 如果全部都沒有，才顯示無優惠
+        if not any([has_free_30m, has_free_1h, has_free_2h, has_free_4h, has_noon_2h]):
+            contents.append({
+                "type": "text",
+                "text": "❌ 無免費停車優惠",
+                "size": "xs",
+                "margin": "md",
+                "color": "#ff0000"
+            })
+
+        bubble = {
+            "type": "bubble",
+            "size": "micro",
+            "body": {
+                "type": "box",
+                "layout": "vertical",
+                "contents": contents
+            },
+            "footer": {
+                "type": "box",
+                "layout": "vertical",
+                "contents": [
+                    {
+                        "type": "button",
+                        "action": {
+                            "type": "uri",
+                            "label": "導航",
+                            "uri": f"https://www.google.com/maps/search/?api=1&query={lot['lat']},{lot['lng']}"
+                        },
+                        "style": "primary",
+                        "color": "#00b900"
+                    }
+                ]
+            }
+        }
+        bubbles.append(bubble)
+
+    flex_message = FlexSendMessage(
+        alt_text="最近的停車場",
+        contents={"type": "carousel", "contents": bubbles}
+    )
+    line_bot_api.reply_message(event.reply_token, flex_message)
+
 if __name__ == "__main__":
     app.run(host='0.0.0.0', port=5000)
