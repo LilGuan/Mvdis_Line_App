@@ -1,105 +1,158 @@
+# ==========================================
+# 📦 匯入模組 (Imports)
+# ==========================================
+
+# --- 標準函式庫 (Standard Libraries) ---
+import base64
+import datetime
+import json
 import os
 import re
-import json
-import time
-import sqlite3
 import threading
+import time
+import traceback
+from urllib.parse import parse_qs
+import openai
+# --- 第三方套件 (Third-party Libraries) ---
+import ddddocr
+import PIL.Image
 import requests
-import base64
-from linebot.models import LocationAction
 import urllib3
-from linebot.models import *
-from geopy.distance import geodesic
-from selenium.webdriver.chrome.options import Options
-from selenium.webdriver.support.ui import Select
-import datetime
-from linebot.models import PostbackAction
-from linebot.models import PostbackEvent
-from urllib.parse import parse_qs # 用來解析 data 字串
+from dotenv import load_dotenv
 from flask import Flask, request, abort
+from geopy.distance import geodesic
+from supabase import create_client
+
+# --- 自動化與爬蟲相關 (Selenium) ---
+from selenium import webdriver
+from selenium.webdriver.chrome.options import Options
+from selenium.webdriver.chrome.service import Service
+from selenium.webdriver.common.by import By
+from selenium.webdriver.support import expected_conditions as EC
+from selenium.webdriver.support.ui import Select, WebDriverWait
+from webdriver_manager.chrome import ChromeDriverManager
+
+# --- LINE Bot SDK ---
 from linebot import LineBotApi, WebhookHandler
 from linebot.exceptions import InvalidSignatureError
 from linebot.models import (
     MessageEvent, TextMessage, TextSendMessage, FlexSendMessage,
+    LocationMessage, LocationAction, PostbackEvent, PostbackAction,
     QuickReply, QuickReplyButton, MessageAction
 )
-from selenium import webdriver
-from selenium.webdriver.common.by import By
-from selenium.webdriver.chrome.options import Options as ChromeOptions
-from selenium.webdriver.support.ui import WebDriverWait
-from selenium.webdriver.support import expected_conditions as EC
-from selenium.webdriver.chrome.service import Service
-from webdriver_manager.chrome import ChromeDriverManager
 
-# 修正 Pillow 版本問題
-import PIL.Image
+# ==========================================
+# 🛠️ 環境初始化 (Initialization)
+# ==========================================
+CRAWLER_MODE = None # 全域變數，稍後根據指令設定為 "local" 或 "remote"
+# 載入 .env 檔案
+load_dotenv()
+
+# 修正 Pillow 版本問題 (相容性修補)
 if not hasattr(PIL.Image, 'ANTIALIAS'):
     PIL.Image.ANTIALIAS = PIL.Image.LANCZOS
-
-import ddddocr
 
 # 忽略 SSL 安全警告
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
 # ==========================================
-# ⚙️ 設定區 (請填入你的資料)
+# ⚙️ 系統設定區 (Configurations)
 # ==========================================
-LINE_CHANNEL_ACCESS_TOKEN = "nX1N//BjGiFlpVcWboFDHEv36yht1xsXHe95cjSLMkEk0jLGdy9GMEL12bm50Mi6CW8DHR02VJ7QDTPiLQ7pzYLsGH85Z1eV2zqUMtjzFjK3tVi+GZ2uBE95+bF+eXbOkYszMMDolrHjt6ptgXkZqwdB04t89/1O/w1cDnyilFU="  # 請填入 LINE Developers 的 Token
-IMGBB_API_KEY = 'db7c5f15e2e4e1d49ba2c216afd94bd5'
-LINE_CHANNEL_SECRET = '06b0ec3c7c42162197cf6c7e17b1eddd'
 
-# 預設圖片 (當沒有罰單照片時顯示)
-DEFAULT_HERO_IMAGE='https://i.ibb.co/mV5wt91s/3c458c36-474e-460b-8d92-39d5abf25305.png'  # 預設卡片圖片 (沒有罰單照片時使用) 
-# 監理站網址
-MV_DIS_URL = "https://www.mvdis.gov.tw/m3-emv-vil/vil/penaltyQueryPay"
-# 資料庫名稱
-DB_NAME = "users_cars.db"
+# --- LINE Channel ---
+LINE_CHANNEL_ACCESS_TOKEN  = os.getenv('LINE_CHANNEL_ACCESS_TOKEN')
+LINE_SECRET        = os.getenv('LINE_CHANNEL_SECRET')
 
-app = Flask(__name__)
+# --- Supabase 雲端資料庫 ---
+SUPABASE_URL       = os.getenv('SUPABASE_URL')
+SUPABASE_KEY       = os.getenv('SUPABASE_KEY')
+
+# --- 外部服務 API ---
+IMGBB_API_KEY      = os.getenv('IMGBB_API_KEY')
+MV_DIS_URL         = os.getenv('MV_DIS_URL')
+
+# --- 圖片設定 ---
+DEFAULT_HERO_IMAGE = os.getenv('DEFAULT_HERO_IMAGE')
+
+# --- AI 相關 ---
+OPENAI_API_KEY = os.getenv('OPENAI_API_KEY')
+# ==========================================
+# 🔌 實例初始化 (Instances)
+# ==========================================
+
+app          = Flask(__name__)
 line_bot_api = LineBotApi(LINE_CHANNEL_ACCESS_TOKEN)
-handler = WebhookHandler(LINE_CHANNEL_SECRET)
-# --- 新增：載入停車場資料 ---
-with open('parking_data.json', 'r', encoding='utf-8') as f:
-    parking_lots = json.load(f)
+handler      = WebhookHandler(LINE_SECRET)
+supabase     = create_client(SUPABASE_URL, SUPABASE_KEY)
+
+# ==========================================
+# 🚀 程式邏輯開始
+# ==========================================
+
+# --- 1. 在程式最上方 ---
+PARKING_CACHE = []
+
+def reload_parking_data():
+    global PARKING_CACHE
+    try:
+        print("正在從雲端同步停車場資料...")
+        response = supabase.table("parking_lots").select("*").execute()
+        PARKING_CACHE = response.data
+        print(f"✅ 同步完成！已成功載入 {len(PARKING_CACHE)} 筆資料。")
+    except Exception as e:
+        print("❌ 快取載入失敗，詳細錯誤如下：")
+        print(e)  # 印出原始錯誤
+        traceback.print_exc() # 印出詳細錯誤行數
+
+# 程式啟動時先跑一次，把 658 筆資料抓進記憶體
+reload_parking_data()
+
 # ==========================================
 # 🗄️ 資料庫管理 (新增 Schedules 表)
 # ==========================================
 def init_db():
-    conn = sqlite3.connect(DB_NAME)
-    c = conn.cursor()
-    # 車輛表
-    c.execute('''CREATE TABLE IF NOT EXISTS cars
-                 (id INTEGER PRIMARY KEY AUTOINCREMENT,
-                  display_name TEXT,
-                  line_id TEXT NOT NULL,
-                  name TEXT,
-                  mode TEXT,
-                  pid TEXT,
-                  plate TEXT,
-                  birthday TEXT)''')
-    
-    # [新增] 排程表
-    # type: 'daily' (每天) 或 'interval' (間隔天數)
-    # value: '08:30' (時間) 或 '3' (天數)
-    # last_run: 上次執行的日期 (YYYY-MM-DD)
-    c.execute('''CREATE TABLE IF NOT EXISTS schedules
-                 (display_name TEXT,
-                  line_id TEXT PRIMARY KEY,
-                  type TEXT,
-                  value TEXT,
-                  last_run TEXT)''')
-    conn.commit()
-    conn.close()
+    """現在僅作為連線測試"""
+    try:
+        supabase.table("cars").select("id").limit(1).execute()
+        print("☁️ Supabase 雲端資料庫連線成功，準備服務 1000 位運將！")
+    except Exception as e:
+        print(f"❌ 連線失敗: {e}")
 
 # --- 車輛相關 ---
 def add_car(line_id, name, mode, pid, plate, birthday="", display_name=""):
-    conn = sqlite3.connect(DB_NAME)
-    c = conn.cursor()
+    """新增車輛綁定"""
+    # 取得 LINE 暱稱
     display_name = get_line_user_name(line_id)
-    c.execute("INSERT INTO cars (line_id, name, mode, pid, plate, birthday, display_name) VALUES (?, ?, ?, ?, ?, ?, ?)",
-              (line_id, name, mode, pid, plate, birthday, display_name))
-    conn.commit()
-    conn.close()
+    
+    data = {
+        "line_id": line_id,
+        "name": name,
+        "mode": mode,
+        "pid": pid,
+        "plate": plate,
+        "birthday": birthday,
+        "display_name": display_name
+    }
+    
+    # 執行插入
+    supabase.table("cars").insert(data).execute()
+    print(f"✅ 已幫 {display_name} 綁定車牌 {plate}")
+
+def check_is_bound(user_id, car_type, search_value):
+    clean_val = search_value.upper().strip()
+    
+    # 這裡直接下 query 給雲端
+    query = supabase.table("cars").select("id", count="exact").eq("line_id", user_id)
+    
+    if car_type == "1":
+        res = query.eq("pid", clean_val).execute()
+    else:
+        res = query.eq("plate", clean_val).execute()
+    
+    # 加這行印出偵錯資訊，看看到底抓到幾筆
+    print(f"DEBUG: 檢查 {clean_val}, 資料庫回傳數量: {res.count}")
+    
+    return res.count > 0
 def get_line_user_name(user_id):
     """跟 LINE 伺服器查詢使用者的顯示名稱"""
     try:
@@ -107,73 +160,53 @@ def get_line_user_name(user_id):
         return profile.display_name
     except:
         return "未知用戶"
-def check_is_bound(user_id, car_type, search_value):
-    """
-    檢查是否已綁定
-    user_id: LINE 使用者 ID
-    car_type: "1" (個人) 或 "2" (公司)
-    search_value: 身分證字號 (個人) 或 車牌號碼 (公司)
-    回傳: True (已存在) / False (未存在)
-    """
-    # 假設你有一個 db_connect() 或是 cursor
-    # 這裡用虛擬代碼示意，請換成你實際的 DB 查詢方式
-    
-    # 範例 SQL 邏輯：
-    # SELECT count(*) FROM cars WHERE user_id = ? AND (personal_id = ? OR plate_no = ?)
-    
-    # === 模擬邏輯 (請替換成你的真實資料庫查詢) ===
-    import sqlite3
-    conn = sqlite3.connect('your_database.db') # 你的資料庫檔名
-    c = conn.cursor()
-    
-    if car_type == "1":
-        # 檢查個人車 (比對身分證)
-        c.execute("SELECT count(*) FROM cars WHERE user_id=? AND personal_id=?", (user_id, search_value))
-    else:
-        # 檢查公司車 (比對車牌)
-        c.execute("SELECT count(*) FROM cars WHERE user_id=? AND plate_no=?", (user_id, search_value))
-        
-    count = c.fetchone()[0]
-    conn.close()
-    
-    return count > 0  # 如果數量大於 0，代表已經綁定過了
 def get_user_cars(line_id):
-    conn = sqlite3.connect(DB_NAME)
-    c = conn.cursor()
-    # 注意：這裡多 select 了一個 row[0] (id)
-    c.execute("SELECT id, name, mode, pid, plate, birthday FROM cars WHERE line_id=?", (line_id,))
-    rows = c.fetchall()
-    conn.close()
+    """取得該使用者的所有車輛清單"""
+    res = supabase.table("cars").select("*").eq("line_id", line_id).execute()
     
+    rows = res.data
     cars = []
     for row in rows:
+        # 維持原本的 Dictionary 結構，讓你的 Flex Message 函式不用改
         cars.append({
-            "db_id": row[0],  # 資料庫的唯一 ID (用來刪除用)
-            "name": row[1],
-            "mode": "legal" if row[2] == "2" else "personal",
-            "id": row[3],      
-            "plate_no": row[4], 
-            "sub_id": row[4] if row[2] == "2" else row[5],
-            "display_id": row[3] # 顯示用的證號
+            "db_id": row['id'],        # Supabase 的唯一 ID
+            "name": row['name'],
+            "mode": "legal" if row['mode'] == "2" else "personal",
+            "id": row['pid'],      
+            "plate_no": row['plate'], 
+            "sub_id": row['plate'] if row['mode'] == "2" else row['birthday'],
+            "display_id": row['pid']   # 顯示用的證號
         })
     return cars
 
+def get_car_by_id(car_db_id):
+    """取得特定 ID 的單一車輛資料"""
+    res = supabase.table("cars").select("*").eq("id", car_db_id).execute()
+    
+    if res.data:
+        row = res.data[0]
+        return {
+            "db_id": row['id'],
+            "name": row['name'],
+            "mode": "legal" if row['mode'] == "2" else "personal",
+            "id": row['pid'],      
+            "plate_no": row['plate'], 
+            "sub_id": row['plate'] if row['mode'] == "2" else row['birthday'],
+            "display_id": row['pid']
+        }
+    return None
+
 def delete_specific_car(line_id, car_db_id):
     """刪除指定 ID 的車輛 (需核對 line_id 避免刪錯別人的)"""
-    conn = sqlite3.connect(DB_NAME)
-    c = conn.cursor()
-    c.execute("DELETE FROM cars WHERE id=? AND line_id=?", (car_db_id, line_id))
-    rows_affected = conn.total_changes
-    conn.commit()
-    conn.close()
-    return rows_affected > 0
+    res = supabase.table("cars").delete().eq("id", car_db_id).eq("line_id", line_id).execute()
+    
+    # 如果有資料被刪除，res.data 會有內容
+    return len(res.data) > 0
 
 def delete_user_cars(line_id):
-    conn = sqlite3.connect(DB_NAME)
-    c = conn.cursor()
-    c.execute("DELETE FROM cars WHERE line_id=?", (line_id,))
-    conn.commit()
-    conn.close()
+    """刪除該使用者所有綁定"""
+    supabase.table("cars").delete().eq("line_id", line_id).execute()
+    print(f"🗑️ 已清除使用者 {line_id} 的所有綁定資料")
 def create_car_list_flex(cars, mode='view'):
     """
     產生車輛列表卡片
@@ -243,25 +276,6 @@ def create_car_list_flex(cars, mode='view'):
             "contents": bubbles
         }
     )
-def get_car_by_id(car_db_id):
-    """取得指定 ID 的單一車輛資料"""
-    conn = sqlite3.connect(DB_NAME)
-    c = conn.cursor()
-    c.execute("SELECT id, name, mode, pid, plate, birthday FROM cars WHERE id=?", (car_db_id,))
-    row = c.fetchone()
-    conn.close()
-    
-    if row:
-        return {
-            "db_id": row[0],
-            "name": row[1],
-            "mode": "legal" if row[2] == "2" else "personal",
-            "id": row[3],      
-            "plate_no": row[4], 
-            "sub_id": row[4] if row[2] == "2" else row[5],
-            "display_id": row[3]
-        }
-    return None
 def create_car_selection_flex(cars):
     """產生讓使用者選擇要查詢哪台車的 Flex Message"""
     bubbles = []
@@ -342,6 +356,48 @@ def send_loading_animation(user_id, duration=20):
         requests.post(url, headers=headers, json=data)
     except Exception as e:
         print(f"Loading 動畫發送失敗: {e}")
+
+client = openai.OpenAI(api_key=OPENAI_API_KEY)
+
+def get_ai_appeal_advice(tkt_no, fact, image_url):
+    """
+    使用 GPT-4o 進行罰單分析
+    """
+    prompt = f"""
+    你是一位專業的台灣交通法律顧問。請分析以下違規案件並給予申訴建議：
+    
+    【違規事實】：{fact}
+    【罰單單號】：{tkt_no}
+    
+    請根據我提供的罰單照片，觀察是否有以下有利於申訴的情況：
+    1. 標線（紅/黃線）是否磨損不清晰？
+    2. 是否有樹木、車輛或雜物遮擋禁止停車標誌？
+    3. 採證照片是否模糊，難以辨識車牌或駕駛？
+    4. 違規時間是否屬於深夜/離峰，且無阻礙交通之情事？
+    
+    請用台灣運將聽得懂、親切的語氣回答。
+    最後，如果建議申訴，請提供一段簡短的『申訴理由書範本』。
+    """
+
+    try:
+        response = client.chat.completions.create(
+            model="gpt-4o",
+            messages=[
+                {
+                    "role": "user",
+                    "content": [
+                        {"type": "text", "text": prompt},
+                        {"type": "image_url", "image_url": {"url": image_url}}
+                    ],
+                }
+            ],
+            max_tokens=800
+        )
+        return response.choices[0].message.content
+    except Exception as e:
+        print(f"AI 分析失敗: {e}")
+        return "抱歉大哥，AI 目前忙碌中，請稍後再試。"
+
 # ==========================================
 # 🎫 選號查詢爬蟲
 # ==========================================
@@ -349,7 +405,7 @@ def crawl_plate_numbers():
     print("🚀 啟動選號爬蟲測試...")
     
     # 測試時建議設為 False，看得到畫面比較好 debug
-    driver = new_chrome(headless=True) 
+    driver = new_chrome() 
     plates = []
     url = "https://www.mvdis.gov.tw/m3-emv-plate/webpickno/queryPickNo#"
 
@@ -532,69 +588,79 @@ def crawl_plate_numbers():
     
     return plates
 
-# --- 排程相關 ---
+# --- 排程相關 (Supabase 版) ---
+
 def set_schedule(line_id, s_type, value, user_name):
-    conn = sqlite3.connect(DB_NAME)
-    c = conn.cursor()
-    
-    # 取得昨天的日期，確保設定後如果是間隔模式可以盡快執行
+    # 取得昨天的日期
     yesterday = (datetime.date.today() - datetime.timedelta(days=1)).strftime("%Y-%m-%d")
     
-    # 更新 SQL 語句，加入 display_name
-    c.execute("REPLACE INTO schedules (line_id, type, value, last_run, display_name) VALUES (?, ?, ?, ?, ?)",
-              (line_id, s_type, value, yesterday, user_name))
-    
-    conn.commit()
-    conn.close()
+    # 使用 upsert：如果 line_id 存在就更新，不存在就新增
+    data = {
+        "line_id": line_id,
+        "type": s_type,
+        "value": value,
+        "last_run": yesterday,
+        "display_name": user_name
+    }
+    # on_conflict 代表當 line_id 重複時執行的動作
+    supabase.table("schedules").upsert(data, on_conflict="line_id").execute()
+    print(f"✅ 已更新 {user_name} 的排程")
 
 def get_schedule(line_id):
-    conn = sqlite3.connect(DB_NAME)
-    c = conn.cursor()
-    c.execute("SELECT type, value FROM schedules WHERE line_id=?", (line_id,))
-    row = c.fetchone()
-    conn.close()
-    return row
+    # 查詢特定使用者的排程
+    res = supabase.table("schedules").select("type, value").eq("line_id", line_id).execute()
+    if res.data:
+        # 回傳格式跟原本 SQLite 一致: (type, value)
+        row = res.data[0]
+        return (row['type'], row['value'])
+    return None
 
 def delete_schedule(line_id):
-    conn = sqlite3.connect(DB_NAME)
-    c = conn.cursor()
-    c.execute("DELETE FROM schedules WHERE line_id=?", (line_id,))
-    conn.commit()
-    conn.close()
+    # 刪除排程
+    supabase.table("schedules").delete().eq("line_id", line_id).execute()
+    print(f"🗑️ 已刪除 {line_id} 的排程")
 
 def update_last_run(line_id):
-    conn = sqlite3.connect(DB_NAME)
-    c = conn.cursor()
+    # 更新最後執行日期為今天
     today = datetime.date.today().strftime("%Y-%m-%d")
-    c.execute("UPDATE schedules SET last_run=? WHERE line_id=?", (today, line_id))
-    conn.commit()
-    conn.close()
+    supabase.table("schedules").update({"last_run": today}).eq("line_id", line_id).execute()
+    print(f"📅 已更新 {line_id} 的最後執行日為 {today}")
 
 def get_all_schedules():
-    conn = sqlite3.connect(DB_NAME)
-    c = conn.cursor()
-    c.execute("SELECT line_id, type, value, last_run FROM schedules")
-    rows = c.fetchall()
-    conn.close()
+    # 取得所有人的排程 (給背景檢查執行緒用的)
+    res = supabase.table("schedules").select("line_id, type, value, last_run").execute()
+    # 轉換成原本 SQLite fetchall() 的格式 [(id, type, val, run), ...]
+    rows = []
+    for row in res.data:
+        rows.append((row['line_id'], row['type'], row['value'], row['last_run']))
     return rows
-
-init_db()
 
 # ==========================================
 # 🕷️ 爬蟲工具 (維持不變)
 # ==========================================
+SE_GRID_URL = os.getenv('SE_GRID_URL')
 
-def new_chrome(headless=True) -> webdriver.Chrome:
+def new_chrome(headless=True):
     options = Options()
-    if headless: options.add_argument("--headless=new")
-    options.add_argument("--user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36")
+    if headless:
+        options.add_argument("--headless=new")
+    
+    # 共用優化參數
     options.add_argument("--no-sandbox")
     options.add_argument("--disable-dev-shm-usage")
     options.add_argument("--window-size=1920,1080")
-    options.add_argument("--disable-gpu")
-    options.add_argument("--ignore-certificate-errors")
-    service = Service(ChromeDriverManager().install())
-    return webdriver.Chrome(options=options)
+
+    if CRAWLER_MODE == "remote":
+        # --- 遠端模式：連線到 Docker Selenium Grid ---
+        url = SE_GRID_URL # 確保 config 裡有這行
+        print(f"DEBUG: [模式: Remote] 正在連線至 {url}")
+        return webdriver.Remote(command_executor=url, options=options)
+    else:
+        # --- 本地模式：直接啟動伺服器上的 Chrome ---
+        print("DEBUG: [模式: Local] 正在啟動本地瀏覽器")
+        # 本地模式需要 Service
+        service = Service(ChromeDriverManager().install())
+        return webdriver.Chrome(service=service, options=options)
 
 def safe_click(driver, locator, timeout=10):
     wait = WebDriverWait(driver, timeout)
@@ -901,7 +967,7 @@ def create_fine_flex_message(record_data, id_number):
     bubbles = []
     for idx, img_url in enumerate(image_urls):
         page_txt = f" ({idx+1}/{len(image_urls)})" if len(image_urls) > 1 else ""
-        
+        violation_fact = record_data['違規事實'].strip()
         bubble = {
             "type": "bubble", "size": "giga",
             "styles": {"header": {"backgroundColor": "#850000"}, "body": {"backgroundColor": "#2b2b2b"}, "footer": {"backgroundColor": "#2b2b2b"}},
@@ -940,8 +1006,37 @@ def create_fine_flex_message(record_data, id_number):
                 ]
             },
             "footer": {
-                "type": "box", "layout": "vertical",
-                "contents": [{"type": "button", "style": "primary", "height": "sm", "action": {"type": "uri", "label": "前往監理站", "uri": MV_DIS_URL}, "color": "#E60000"}]
+                "type": "box",
+                "layout": "vertical",
+                "spacing": "sm",  # 按鈕之間的間距
+                "contents": [
+                    # 按鈕 1：原本的前往監理站
+                    {
+                        "type": "button",
+                        "style": "primary",
+                        "height": "sm",
+                        "color": "#E60000",
+                        "action": {
+                            "type": "uri",
+                            "label": "前往監理站繳費",
+                            "uri": MV_DIS_URL
+                        }
+                    },
+                    # 按鈕 2：新增的 AI 評估按鈕
+                    {
+                        "type": "button",
+                        "style": "secondary",
+                        "height": "sm",
+                        "color": "#00b900",
+                        "action": {
+                            "type": "postback",
+                            "label": "🤖 AI 申訴評估",
+                            # 這裡多帶一個 &fact 參數
+                            "data": f"action=ai_analyze&tkt_no={tkt_no}&img_url={img_url}&fact={violation_fact}",
+                            "displayText": f"請幫我分析這張罰單{tkt_no}能否申訴"
+                        }
+                    }
+                ]
             }
         }
         bubbles.append(bubble)
@@ -961,102 +1056,110 @@ def process_crawling_for_user(user_id, car_list, reply_token, is_auto_schedule=F
     print(f"啟動爬蟲，目標: {user_id}, 模式: {'自動排程' if is_auto_schedule else '手動查詢'}")
     if not is_auto_schedule:
         send_loading_animation(user_id, duration=60)
-    driver = new_chrome(headless=True)
-    
-    # 收集所有要發送的訊息物件
-    messages_to_send = []
-    results_text = [] # 用來存純文字結果
-
     try:
-        # 爬蟲邏輯 (與原本相同，但不再中途 push 訊息)
-        for car in car_list:
-            try:
-                driver.get(MV_DIS_URL)
-                max_retries = 3
-                success = False
-                
-                for attempt in range(max_retries):
-                    try:
-                        prepare_page_mode(driver, car['mode'])
-                        captcha = get_captcha_and_solve(driver, car['mode'])
-                        execute_query(driver, car['mode'], car['id'], car['sub_id'], captcha)
-                        time.sleep(2)
-                        
-                        try:
-                            alert = driver.switch_to.alert
-                            alert.accept()
-                            driver.refresh()
-                            continue
-                        except: pass
-                        
-                        if "驗證碼錯誤" in driver.page_source:
-                            driver.refresh()
-                            continue
-                            
-                        # 狀況 1: 無違規
-                        if "查無" in driver.page_source and "資料" in driver.page_source:
-                            results_text.append(f"✅ {car['name']}：無違規")
-                            success = True
-                            break
-                            
-                        # 狀況 2: 有違規
-                        records = get_all_pages_data(driver)
-                        if records:
-                            results_text.append(f"🚨 {car['name']}：發現 {len(records)} 筆罰單！")
-                            # 建立罰單卡片並加入待發送清單
-                            for record in records:
-                                try:
-                                    flex_msg = create_fine_flex_message(record, car['id'])
-                                    messages_to_send.append(flex_msg)
-                                except: pass
-                            success = True
-                            break
-                        
-                        driver.refresh()
-                        
-                    except Exception as e:
-                        print(f"嘗試錯誤: {e}")
-                        driver.refresh()
-                
-                if not success:
-                    results_text.append(f"⚠️ {car['name']}：查詢失敗")
-                    
-            except Exception as e:
-                print(f"單一車輛錯誤: {e}")
-        
-        # === 建立總結訊息 ===
-        summary_text = "📅 查詢報告：\n" + "\n".join(results_text)
-        
-        # 將總結文字放在最前面
-        messages_to_send.insert(0, TextSendMessage(text=summary_text))
-        
-        # 限制一次最多發送 5 則訊息 (Line API 限制)
-        # 如果罰單太多，我們只傳前 4 張 + 總結
-        if len(messages_to_send) > 5:
-            messages_to_send = messages_to_send[:5]
-            messages_to_send.append(TextSendMessage(text="⚠️ 罰單較多，僅顯示前幾筆，請至監理站查詢完整內容。"))
-
-        # === 發送訊息 ===
-        if is_auto_schedule:
-            # 排程模式：還是得用 push，因為沒有 reply_token
-            # 但排程通常一天才一次，應該還好
-            for msg in messages_to_send:
-                line_bot_api.push_message(user_id, msg)
+        driver = new_chrome()
+        if CRAWLER_MODE == "remote":
+            print(f"DEBUG: 成功連線至 Selenium Grid 伺服器 ({SE_GRID_URL})!")
         else:
-            # 手動模式：使用 reply_message (免費！)
-            # 注意：這裡假設爬蟲能在 30-60 秒內跑完，否則 Token 會過期
-            if reply_token:
-                line_bot_api.reply_message(reply_token, messages_to_send)
-            else:
-                print("錯誤：手動模式但沒有 reply_token")
+            print("DEBUG: 成功啟動本地瀏覽器!")
 
+    
+        # 收集所有要發送的訊息物件
+        messages_to_send = []
+        results_text = [] # 用來存純文字結果
+
+        try:
+            # 爬蟲邏輯 (與原本相同，但不再中途 push 訊息)
+            for car in car_list:
+                try:
+                    driver.get(MV_DIS_URL)
+                    max_retries = 3
+                    success = False
+
+                    for attempt in range(max_retries):
+                        try:
+                            prepare_page_mode(driver, car['mode'])
+                            captcha = get_captcha_and_solve(driver, car['mode'])
+                            execute_query(driver, car['mode'], car['id'], car['sub_id'], captcha)
+                            time.sleep(2)
+
+                            try:
+                                alert = driver.switch_to.alert
+                                alert.accept()
+                                driver.refresh()
+                                continue
+                            except: pass
+
+                            if "驗證碼錯誤" in driver.page_source:
+                                driver.refresh()
+                                continue
+
+                            # 狀況 1: 無違規
+                            if "查無" in driver.page_source and "資料" in driver.page_source:
+                                results_text.append(f"✅ {car['name']}：無違規")
+                                success = True
+                                break
+
+                            # 狀況 2: 有違規
+                            records = get_all_pages_data(driver)
+                            if records:
+                                results_text.append(f"🚨 {car['name']}：發現 {len(records)} 筆罰單！")
+                                # 建立罰單卡片並加入待發送清單
+                                for record in records:
+                                    try:
+                                        flex_msg = create_fine_flex_message(record, car['id'])
+                                        messages_to_send.append(flex_msg)
+                                    except: pass
+                                success = True
+                                break
+                            
+                            driver.refresh()
+
+                        except Exception as e:
+                            print(f"嘗試錯誤: {e}")
+                            driver.refresh()
+
+                    if not success:
+                        results_text.append(f"⚠️ {car['name']}：查詢失敗")
+
+                except Exception as e:
+                    print(f"單一車輛錯誤: {e}")
+
+            # === 建立總結訊息 ===
+            summary_text = "📅 查詢報告：\n" + "\n".join(results_text)
+
+            # 將總結文字放在最前面
+            messages_to_send.insert(0, TextSendMessage(text=summary_text))
+
+            # 限制一次最多發送 5 則訊息 (Line API 限制)
+            # 如果罰單太多，我們只傳前 4 張 + 總結
+            if len(messages_to_send) > 5:
+                messages_to_send = messages_to_send[:5]
+                messages_to_send.append(TextSendMessage(text="⚠️ 罰單較多，僅顯示前幾筆，請至監理站查詢完整內容。"))
+
+            # === 發送訊息 ===
+            if is_auto_schedule:
+                # 排程模式：還是得用 push，因為沒有 reply_token
+                # 但排程通常一天才一次，應該還好
+                for msg in messages_to_send:
+                    line_bot_api.push_message(user_id, msg)
+            else:
+                # 手動模式：使用 reply_message (免費！)
+                # 注意：這裡假設爬蟲能在 30-60 秒內跑完，否則 Token 會過期
+                if reply_token:
+                    line_bot_api.reply_message(reply_token, messages_to_send)
+                else:
+                    print("錯誤：手動模式但沒有 reply_token")
+
+        except Exception as e:
+            print(f"瀏覽器或發送錯誤: {e}")
+            # 如果出錯，嘗試回傳錯誤訊息 (如果 Token 還沒過期)
+            if not is_auto_schedule and reply_token:
+                try:
+                    line_bot_api.reply_message(reply_token, TextSendMessage(text="❌ 查詢發生錯誤或逾時，請稍後再試。"))
+                except: pass
     except Exception as e:
-        print(f"瀏覽器或發送錯誤: {e}")
-        # 如果出錯，嘗試回傳錯誤訊息 (如果 Token 還沒過期)
-        if not is_auto_schedule and reply_token:
-            try:
-                line_bot_api.reply_message(reply_token, TextSendMessage(text="❌ 查詢發生錯誤或逾時，請稍後再試。"))
-            except: pass
+        print(f"DEBUG: 爬蟲連線失敗，原因: {e}")
     finally:
         driver.quit()
 
@@ -1135,38 +1238,35 @@ DB_NAME = 'users_cars.db' # 你的資料庫檔名
 
 def check_car_exists(line_id, mode, value_to_check):
     """
-    檢查車輛是否重複綁定
-    line_id: LINE 使用者 ID
-    mode: "1" (個人) / "2" (公司)
-    value_to_check: 
-        - 個人車: 傳入身分證 (比對 pid 欄位)
-        - 公司車: 傳入車牌 (比對 plate 欄位)
+    檢查車輛是否重複綁定 (Supabase 雲端版)
     """
-    is_exist = False
+    # 1. 整理輸入值，避免因為大小寫或空格導致判斷錯誤
+    clean_val = value_to_check.upper().strip()
+    
     try:
-        conn = sqlite3.connect(DB_NAME)
-        c = conn.cursor()
+        # 2. 建立查詢：先鎖定這位使用者的 line_id
+        query = supabase.table("cars").select("id", count="exact").eq("line_id", line_id)
         
         if mode == "1":
-            # 個人車：檢查 line_id + pid (身分證) 是否重複
-            sql = "SELECT 1 FROM cars WHERE line_id = ? AND pid = ?"
-            c.execute(sql, (line_id, value_to_check))
+            # 個人車：檢查 pid (身分證) 是否重複
+            res = query.eq("pid", clean_val).execute()
+        else:
+            # 公司車：檢查 plate (車牌) 是否重複
+            res = query.eq("plate", clean_val).execute()
+        
+        # 3. 判斷數量是否大於 0
+        # res.count 會回傳符合條件的資料總數
+        is_exist = res.count > 0
+        
+        if is_exist:
+            print(f"🚩 偵測到重複綁定: {clean_val} (用戶: {line_id})")
             
-        elif mode == "2":
-            # 公司車：檢查 line_id + plate (車牌) 是否重複
-            sql = "SELECT 1 FROM cars WHERE line_id = ? AND plate = ?"
-            c.execute(sql, (line_id, value_to_check))
-            
-        # 如果有查到資料，代表重複
-        if c.fetchone():
-            is_exist = True
-            
-        conn.close()
-    except Exception as e:
-        print(f"資料庫檢查錯誤: {e}")
-        return False 
+        return is_exist
 
-    return is_exist
+    except Exception as e:
+        print(f"❌ 雲端資料庫檢查錯誤: {e}")
+        # 如果資料庫連不上，保險起見回傳 False 讓使用者可以繼續嘗試，或者報錯
+        return False
 # ==========================================
 # 🤖 LINE Webhook & 指令處理
 # ==========================================
@@ -1230,7 +1330,9 @@ def run_plate_crawler(user_id, reply_token):
         try:
             line_bot_api.reply_message(reply_token, TextSendMessage(text="⚠️ 發生錯誤，無法顯示結果。"))
         except: pass
-
+def fetch_parking_data():
+    response = supabase.table("parking_lots").select("*").execute()
+    return response.data
 @handler.add(MessageEvent, message=TextMessage)
 def handle_message(event):
     user_id = event.source.user_id
@@ -1317,7 +1419,7 @@ def handle_message(event):
                 del user_sessions[user_id]
                 line_bot_api.reply_message(
                     event.reply_token, 
-                    TextSendMessage(text=f"✅ 綁定成功！\n\n🚗 暱稱：{data['name']}\n🆔 身分證：{data['id']}\n🎂 生日：{msg}")
+                    TextSendMessage(text=f"✅ 綁定成功！\n\n🚗 暱稱：{data['name']}\n🪪 身分證：{data['id']}\n🎂 生日：{msg}")
                 )
             except Exception as e:
                 del user_sessions[user_id]
@@ -1568,30 +1670,39 @@ def handle_message(event):
         line_bot_api.reply_message(event.reply_token, reply_msg)
         return
 
+    elif msg == "remote":
+        if user_id != os.getenv('Admin_uuid'):
+            line_bot_api.reply_message(event.reply_token, TextSendMessage(text="❌ 您沒有權限切換爬蟲模式。"))
+            return
+        CRAWLER_MODE = "remote"
+        line_bot_api.reply_message(event.reply_token, TextSendMessage(text="🚀 爬蟲模式已切換為：【遠端 Grid 模式】"))
+        return
+
+    elif msg == "local":
+        if user_id != os.getenv('Admin_uuid'):
+            line_bot_api.reply_message(event.reply_token, TextSendMessage(text="❌ 您沒有權限切換爬蟲模式。"))
+            return
+        CRAWLER_MODE = "local"
+        line_bot_api.reply_message(event.reply_token, TextSendMessage(text="💻 爬蟲模式已切換為：【本地 Local 模式】"))
+        return
+
     elif msg == "備份資料庫":
-        if user_id != "Uc033d76e142adb971941e27cd685856f": # 記得換成你自己的 ID
+        if user_id != os.getenv('Admin_uuid'):
             return
 
         try:
-            import requests
-            
-            # 使用 transfer.sh 服務
-            # 注意：這裡使用 put 方法
-            with open(DB_NAME, 'rb') as f:
-                # upload_file = {'file': f} 
-                # transfer.sh 的格式比較單純，直接 put 檔案內容即可，或使用 files 參數
-                
-                # 為了穩定，我們用標準的 files 上傳方式
-                files = {'file': (DB_NAME, f)}
-                response = requests.post('https://transfer.sh/', files=files)
-            
-            # transfer.sh 成功的話會直接回傳網址 (純文字)，不是 JSON
+            # 改連到 file.io
+            with open('users_cars.db', 'rb') as f:
+                files = {'file': f}
+                # file.io 預設檔案下載一次後就會自動刪除，很安全
+                response = requests.post('https://file.io', files=files)
+
             if response.status_code == 200:
-                download_link = response.text.strip() # 取得網址
-                
+                data = response.json()
+                download_link = data.get('link')
                 line_bot_api.reply_message(
                     event.reply_token, 
-                    TextSendMessage(text=f"📦 資料庫備份成功！(保存14天)\n\n{download_link}")
+                    TextSendMessage(text=f"📦 SQLite 備份成功！\n注意：此連結下載一次後即失效\n\n{download_link}")
                 )
             else:
                 line_bot_api.reply_message(
@@ -1637,119 +1748,94 @@ def handle_postback(event):
                 event.reply_token, 
                 TextSendMessage(text="❌ 找不到該車輛資料，可能已被刪除。")
             )
+    elif action == 'ai_analyze':
+        # 1. 先把資料拿出來
+        tkt_no = params.get('tkt_no', [''])[0]
+        img_url = params.get('img_url', [''])[0]
+        fact = params.get('fact', [''])[0]
+        user_id = event.source.user_id
+        send_loading_animation(user_id, duration=60)
+        # 2. 建立一個專門跑 AI 的副程式
+        def run_ai_and_push(u_id, t_no, f_txt, i_url):
+            advice = get_ai_appeal_advice(t_no, f_txt, i_url)
+            line_bot_api.push_message(
+                u_id,
+                TextSendMessage(text=f"【🤖 罰單 AI 評估報告】\n\n{advice}")
+            )
+
+        # 3. 開啟新執行緒去跑 AI，主程式立刻往下走結束 callback
+        threading.Thread(
+            target=run_ai_and_push, 
+            args=(user_id, tkt_no, fact, img_url)
+        ).start()
+
 @handler.add(MessageEvent, message=LocationMessage)
 def handle_location(event):
+    # 防呆：如果是 LINE 控制台的測試訊息 (Verify)，直接跳過
+    if event.reply_token in ["00000000000000000000000000000000", "ffffffffffffffffffffffffffffffff"]:
+        return
+
     user_lat = event.message.latitude
     user_lng = event.message.longitude
     user_pos = (user_lat, user_lng)
 
-    # 計算距離並排序
-    for lot in parking_lots:
+    # 1. 取得資料（建議使用之前教你的 PARKING_CACHE 快取以防超時，這裡先維持你的邏輯）
+    try:
+        response = supabase.table("parking_lots").select("*").execute()
+        current_lots = response.data 
+    except Exception as e:
+        print(f"資料庫讀取失敗: {e}")
+        line_bot_api.reply_message(event.reply_token, TextSendMessage(text="抱歉，資料庫連線超時，請稍後再試。"))
+        return
+    
+    # 2. 計算距離
+    for lot in current_lots:
         lot_pos = (lot['lat'], lot['lng'])
         lot['distance'] = round(geodesic(user_pos, lot_pos).km, 2)
 
-    # 取最近的 5 筆
-    nearby_lots = sorted(parking_lots, key=lambda x: x['distance'])[:5]
+    # 3. 取最近的 5 筆
+    nearby_lots = sorted(current_lots, key=lambda x: x['distance'])[:5]
 
-    # 建立 Flex Message 氣泡清單
+    # 4. 建立 Flex Message 氣泡清單
     bubbles = []
     for lot in nearby_lots:
+        # 基本資訊區塊
         contents = [
-            {
-                "type": "text",
-                "text": lot['name'],
-                "weight": "bold",
-                "size": "sm",
-                "wrap": True
-            },
-            {
-                "type": "text",
-                "text": f"距離: {lot['distance']} km",
-                "size": "xs",
-                "color": "#ff5551"
-            },
-            {
-                "type": "text",
-                "text": f"📍 {lot['address']}",
-                "size": "xxs",
-                "color": "#aaaaaa",
-                "wrap": True
-            },
-            {
-                "type": "separator",
-                "margin": "md"
-            }
+            {"type": "text", "text": lot['name'], "weight": "bold", "size": "sm", "wrap": True},
+            {"type": "text", "text": f"距離: {lot['distance']} km", "size": "xs", "color": "#ff5551"},
+            {"type": "text", "text": f"📍 {lot['address']}", "size": "xxs", "color": "#aaaaaa", "wrap": True},
+            {"type": "separator", "margin": "md"}
         ]
 
+        # --- 【補回：優惠時數顯示邏輯】 ---
         has_free_30m = lot.get('free_30m', False)
         has_free_1h = lot.get('free_1h', False)
         has_free_2h = lot.get('free_2h', False)
         has_free_4h = lot.get('free_4h', False)
         has_noon_2h = lot.get('noon_2h', False)
 
-        # 只有「只有 30 分鐘免費」時才顯示
-        only_free_30m = (
-            has_free_30m
-            and not has_free_1h
-            and not has_free_2h
-            and not has_free_4h
-            and not has_noon_2h
-        )
-
-        if only_free_30m:
-            contents.append({
-                "type": "text",
-                "text": "✅ 未滿30分鐘免費",
-                "size": "xs",
-                "margin": "md",
-                "color": "#00b900"
-            })
-
+        # 邏輯判斷顯示內容
+        # 1. 如果只有 30 分鐘
+        if has_free_30m and not any([has_free_1h, has_free_2h, has_free_4h, has_noon_2h]):
+            contents.append({"type": "text", "text": "✅ 未滿30分鐘免費", "size": "xs", "margin": "md", "color": "#00b900"})
+        
+        # 2. 顯示各種小時數 (如果有就顯示)
         if has_free_1h:
-            contents.append({
-                "type": "text",
-                "text": "✅ 1小時免費",
-                "size": "xs",
-                "margin": "md" if not only_free_30m else "none",
-                "color": "#00b900"
-            })
-
+            contents.append({"type": "text", "text": "✅ 1小時免費", "size": "xs", "margin": "md", "color": "#00b900"})
+        
         if has_free_2h:
-            contents.append({
-                "type": "text",
-                "text": "✅ 2小時免費",
-                "size": "xs",
-                "margin": "md" if not only_free_30m and not has_free_1h else "none",
-                "color": "#00b900"
-            })
-
+            contents.append({"type": "text", "text": "✅ 2小時免費", "size": "xs", "margin": "md", "color": "#00b900"})
+        
         if has_free_4h:
-            contents.append({
-                "type": "text",
-                "text": "✅ 4小時免費",
-                "size": "xs",
-                "margin": "md" if not only_free_30m and not has_free_1h and not has_free_2h else "none",
-                "color": "#00b900"
-            })
-
+            contents.append({"type": "text", "text": "✅ 4小時免費", "size": "xs", "margin": "md", "color": "#00b900"})
+        
         if has_noon_2h:
-            contents.append({
-                "type": "text",
-                "text": "✅ 中午免費2小時",
-                "size": "xs",
-                "margin": "md" if not only_free_30m and not has_free_1h and not has_free_2h and not has_free_4h else "none",
-                "color": "#00b900"
-            })
+            contents.append({"type": "text", "text": "✅ 中午免費2小時", "size": "xs", "margin": "md", "color": "#00b900"})
 
-        # 如果全部都沒有，才顯示無優惠
+        # 3. 如果通通都沒有
         if not any([has_free_30m, has_free_1h, has_free_2h, has_free_4h, has_noon_2h]):
-            contents.append({
-                "type": "text",
-                "text": "❌ 無免費停車優惠",
-                "size": "xs",
-                "margin": "md",
-                "color": "#ff0000"
-            })
+            contents.append({"type": "text", "text": "❌ 無免費停車優惠", "size": "xs", "margin": "md", "color": "#ff0000"})
+        # -------------------------------
 
         bubble = {
             "type": "bubble",
@@ -1778,8 +1864,9 @@ def handle_location(event):
         }
         bubbles.append(bubble)
 
+    # 5. 發送訊息
     flex_message = FlexSendMessage(
-        alt_text="最近的停車場",
+        alt_text="最近的計程車免費停車場",
         contents={"type": "carousel", "contents": bubbles}
     )
     line_bot_api.reply_message(event.reply_token, flex_message)
