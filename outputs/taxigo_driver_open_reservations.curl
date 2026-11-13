@@ -1,0 +1,11 @@
+curl 'https://api.taxigo.com.tw/v3/drivers/open-reservations?uuid=2CCB15DD-EA4F-4683-A657-BDB0ADD923AD' \
+  -H 'Host: api.taxigo.com.tw' \
+  -H 'Accept: */*' \
+  -H 'Accept-Language: zh-TW,zh-Hant;q=0.9' \
+  -H 'Authorization: JWT eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJ1aWQiOjI1Mzk3NjcsImlhdCI6MTc4ODE2NTQ1MiwiZXhwIjoxNzg4NzcwMjUyLCJhdWQiOiJhcGkudGF4aWdvLmNvbS50dyIsImlzcyI6ImF1dGgudGF4aWdvLmNvbS50dyJ9.t3dZEdYpKEA81dJqICYf3e_7KrE7rqwPUhsLTi00xFA' \
+  -H 'User-Agent: Driver iOS-27.0, iPhone16,2, uuid: 2CCB15DD-EA4F-4683-A657-BDB0ADD923AD' \
+  -H 'X-Build-Number: 2559' \
+  -H 'X-App-Version: 6.55.0' \
+  -H 'X-Platform: iOS' \
+  -H 'X-Role: driver' \
+  --compressed

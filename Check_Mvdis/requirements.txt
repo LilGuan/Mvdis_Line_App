@@ -1,0 +1,12 @@
+flask
+python-dotenv
+line-bot-sdk
+supabase
+requests
+urllib3
+geopy
+selenium
+webdriver-manager
+ddddocr
+openai
+Pillow

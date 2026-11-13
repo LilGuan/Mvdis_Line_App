@@ -1,0 +1,22 @@
+services:
+  selenium-hub:
+    image: selenium/hub:4.16.1
+    container_name: selenium-hub
+    ports:
+      - "4442:4442"
+      - "4443:4443"
+      - "4444:4444"
+
+  chrome:
+    image: selenium/node-chrome:4.16.1
+    shm_size: 2gb  # 每個容器給 2GB 共享記憶體
+    depends_on:
+      - selenium-hub
+    environment:
+      - SE_EVENT_BUS_HOST=selenium-hub
+      - SE_EVENT_BUS_PUBLISH_PORT=4442
+      - SE_EVENT_BUS_SUBSCRIBE_PORT=4443
+      - SE_NODE_MAX_SESSIONS=1  # 每個節點跑 8 個視窗，較符合 16GB 負擔
+      - SE_VNC_PASSWORD=0000
+    deploy:
+      replicas: 10  # 啟動 3 個節點，總共 3 x 8 = 24 個並發名額
