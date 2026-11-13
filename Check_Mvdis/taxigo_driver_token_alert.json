@@ -1,0 +1,4 @@
+{
+  "last_alert_date": "2026-09-01",
+  "last_error": "LineBotApiError: status_code=400, request_id=d2bf5dba-c834-43d3-9ca9-4495d8d19080, error_response={\"details\": [], \"message\": \"Invalid reply token\"}, headers={'Server': 'legy', 'Content-Type': 'application/json', 'x-content-type-options': 'nosniff', 'x-frame-options': 'DENY', 'x-line-request-id': 'd2bf5dba-c834-43d3-9ca9-4495d8d19080', 'x-xss-protection': '1; mode=block', 'Content-Length': '33', 'Expires': 'Tue, 01 Sep 2026 09:35:09 GMT', 'Cache-Control': 'max-age=0, no-cache, no-store', 'Pragma': 'no-cache', 'Date': 'Tue, 01 Sep 2026 09:35:09 GMT', 'Connection': 'close'}"
+}

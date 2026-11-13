@@ -1,0 +1,5 @@
+{
+  "scheduled_fines:20260901": true,
+  "scheduled_fines_last_notice": "[重要通知]\n因line bot reply token 已達到每月額度上限 排程查罰單將暫停使用直到20260901",
+  "scheduled_fines_last_notice_push_failed": "LineBotApiError: status_code=429, request_id=8ff706b7-1224-4a99-965e-15268fa58405, error_response={\"details\": [], \"message\": \"You have reached your monthly limit.\"}, headers={'Server': 'legy', 'Content-Type': 'application/json', 'x-content-type-options': 'nosniff', 'x-frame-options': 'DENY', 'x-line-request-id': '8ff706b7-1224-4a99-965e-15268fa58405', 'x-xss-protection': '1; mode=block', 'Content-Length': '50', 'Expires': 'Wed, 26 Aug 2026 01:03:28 GMT', 'Cache-Control': 'max-age=0, no-cache, no-store', 'Pragma': 'no-cache', 'Date': 'Wed, 26 Aug 2026 01:03:28 GMT', 'Connection': 'close'}"
+}

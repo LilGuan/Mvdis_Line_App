@@ -931,6 +931,91 @@ def get_new_taipei_photos(tkt_no):
         print(f"連線錯誤: {e}")
     
     return base64_list
+
+def get_taoyuan_photos(tkt_no, vil_date, plt_no):
+    """
+    爬取桃園市罰單照片 (D開頭單號)
+    tkt_no: 違規單號
+    vil_date: 違規日期 (格式需為 7 碼，如 1130218)
+    plt_no: 違規車號 (需含 - 符號)
+    """
+    url = "https://trafficphoto.typd.gov.tw/Login"
+    driver = new_chrome() # 使用您現有的初始化瀏覽器函式
+    base64_list = []
+
+    try:
+        driver.get(url)
+        wait = WebDriverWait(driver, 15)
+
+        # 1. 填寫表單資訊
+        print(f"正在填寫桃園查詢表單: {tkt_no}")
+        wait.until(EC.presence_of_element_located((By.ID, "TktNo"))).send_keys(tkt_no)
+        driver.find_element(By.ID, "VilDate").send_keys(vil_date)
+        driver.find_element(By.ID, "PltNo").send_keys(plt_no)
+
+        # 2. 處理驗證碼
+        print("正在辨識桃園驗證碼...")
+        captcha_img = driver.find_element(By.ID, "CaptchaImage")
+        # 滾動到元素位置確保截圖正確
+        driver.execute_script("arguments[0].scrollIntoView({block:'center'});", captcha_img)
+        time.sleep(0.5)
+        
+        captcha_bytes = captcha_img.screenshot_as_png
+        ocr = ddddocr.DdddOcr(show_ad=False)
+        captcha_code = ocr.classification(captcha_bytes)
+        print(f"辨識結果: {captcha_code}")
+        
+        driver.find_element(By.ID, "CaptchaText").send_keys(captcha_code)
+
+        # 3. 送出查詢
+        driver.find_element(By.ID, "SearchBtn").click()
+        
+        # 4. 等待結果並抓取照片
+        # 桃園系統通常會先出現縮圖清單 HYIMageRepeater
+        try:
+            # 等待大圖載入
+            wait.until(EC.presence_of_element_located((By.ID, "image")))
+            time.sleep(1) # 給予緩衝時間載入 ASHX 串流影像
+
+            # 檢查是否有複數照片 (Repeater)
+            thumbnails = driver.find_elements(By.CSS_SELECTOR, "input[id^='HYIMageRepeater_ImageButton_']")
+            
+            if thumbnails:
+                # 遍歷所有縮圖按鈕，點擊並抓取大圖
+                for i in range(len(thumbnails)):
+                    # 重新尋找元素避免 StaleElementReferenceException
+                    btns = driver.find_elements(By.CSS_SELECTOR, "input[id^='HYIMageRepeater_ImageButton_']")
+                    btns[i].click()
+                    time.sleep(1)
+                    
+                    target_img = driver.find_element(By.ID, "image")
+                    img_b64 = target_img.screenshot_as_base64
+                    base64_list.append(img_b64)
+            else:
+                # 只有單張照片時直接抓取
+                target_img = driver.find_element(By.ID, "image")
+                img_b64 = target_img.screenshot_as_base64
+                base64_list.append(img_b64)
+
+            print(f"成功取得 {len(base64_list)} 張桃園罰單照片")
+
+        except Exception as e:
+            # 可能是驗證碼錯誤或查無資料
+            page_content = driver.page_source
+            if "驗證碼錯誤" in page_content:
+                print("❌ 桃園驗證碼辨識失敗")
+            elif "查無資料" in page_content:
+                print("✅ 桃園系統回報查無此照片資料")
+            else:
+                print(f"❌ 桃園查詢發生未知錯誤: {e}")
+
+    except Exception as e:
+        print(f"❌ 桃園爬蟲連線出錯: {e}")
+    
+    finally:
+        driver.quit()
+    
+    return base64_list
 def upload_to_imgbb(base64_str):
     if not base64_str: return None
     url = "https://api.imgbb.com/1/upload"
@@ -956,6 +1041,13 @@ def create_fine_flex_message(record_data, id_number):
             time.sleep(0.5)
     elif tkt_no.startswith('C'):
         base64_list = get_new_taipei_photos(tkt_no)
+        for b64 in base64_list:
+            url = upload_to_imgbb(b64)
+            if url: image_urls.append(url)
+            time.sleep(0.5)
+    elif tkt_no.startswith('D'):
+        vil_date = record_data['違規時間'][:7].replace("/", "") # 轉成民國年月格式
+        base64_list = get_taoyuan_photos(tkt_no, vil_date, record_data['車號'])
         for b64 in base64_list:
             url = upload_to_imgbb(b64)
             if url: image_urls.append(url)

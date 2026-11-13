@@ -1,0 +1,14 @@
+{
+  "active": false,
+  "min_fare": 500,
+  "areas": [
+    124,
+    126,
+    127,
+    128
+  ],
+  "date_mode": "all",
+  "date_value": "",
+  "frequency_min_sec": 54,
+  "frequency_max_sec": 69
+}

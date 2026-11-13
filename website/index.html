@@ -1,0 +1,233 @@
+<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>MVDIS Line Bot | 你的智能交通管家</title>
+    <meta name="description" content="自動化監理網罰單查詢、AI 違規申訴建議，你的智慧 Line 交通助理。">
+    <!-- Google Fonts -->
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=Noto+Sans+TC:wght@400;500;700&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="style.css">
+</head>
+<body>
+    <!-- Navbar -->
+    <nav class="navbar glass-effect sticky">
+        <div class="container nav-content">
+            <div class="logo">
+                <span class="logo-icon">🚗</span>
+                <span class="logo-text">MVDIS Bot</span>
+            </div>
+            <ul class="nav-links">
+                <li><a href="#features">功能亮點</a></li>
+                <li><a href="#how-it-works">使用方式</a></li>
+                <li><a href="#faq">常見問題</a></li>
+            </ul>
+            <a href="#" class="btn btn-primary btn-sm CTA-button">加入 Line 好友</a>
+        </div>
+    </nav>
+
+    <!-- Animated Background Blobs -->
+    <div class="blob blob-1"></div>
+    <div class="blob blob-2"></div>
+    <div class="blob blob-3"></div>
+
+    <!-- Hero Section -->
+    <section class="hero" id="home">
+        <div class="container hero-container">
+            <div class="hero-content animate-on-load">
+                <div class="badge">🚀 最新上線 2.0 版本</div>
+                <h1 class="hero-title">
+                    告別繁瑣查詢<br>
+                    你的<span class="gradient-text">智能交通管家</span>
+                </h1>
+                <p class="hero-subtitle">
+                    綁定 Line 帳號，自動爬蟲隨時為您監測交通紅單。<br>
+                    結合 GPT-4 AI 影像分析，為您提供最專業的申訴建議。
+                </p>
+                <div class="hero-stats">
+                    <div class="stat-card glass-effect">
+                        <div class="stat-number" data-target="24">0</div>
+                        <div class="stat-label">小時自動巡檢</div>
+                    </div>
+                    <div class="stat-card glass-effect">
+                        <div class="stat-number" data-target="95">0</div>
+                        <div class="stat-label">驗證碼辨識成功率 %</div>
+                    </div>
+                    <div class="stat-card glass-effect">
+                        <div class="stat-number" data-target="3">0</div>
+                        <div class="stat-label">分鐘內完成綁定</div>
+                    </div>
+                </div>
+                <div class="hero-cta">
+                    <a href="#" class="btn btn-primary CTA-button">
+                        <span class="icon">💬</span> 免費開始使用
+                    </a>
+                    <a href="#features" class="btn btn-outline">了解更多</a>
+                </div>
+            </div>
+            <div class="hero-image animate-on-load delay-1">
+                <div class="phone-mockup glass-effect">
+                    <!-- Dashboard Mockup inside a glass card -->
+                    <div class="chat-header">
+                        <div class="avatar"></div>
+                        <div class="name">MVDIS 測速助理</div>
+                    </div>
+                    <div class="chat-body" id="chatBody">
+                        <div class="chat-bubble left show-now">您好👋！我是您的交通服務小幫手。請先綁定您的車輛資料！</div>
+                        <div class="chat-bubble right show-now">新增個人車輛 🚗</div>
+                        <div class="chat-bubble left ticket-alert show-now">
+                            <div class="alert-title">⚠️ 發現新罰單</div>
+                            <div class="alert-desc">車號：ABC-1234<br>違規事項：違規停車 (AI 建議可申訴)</div>
+                            <button class="btn-micro" id="openAppealDemo">查看 AI 申訴建議</button>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </section>
+
+    <!-- Features Section -->
+    <section class="features" id="features">
+        <div class="container">
+            <div class="section-header scroll-animate">
+                <h2 class="section-title">強大且自動化的雲端服務</h2>
+                <p class="section-desc">我們運用最先進的網頁爬蟲與 AI 技術，為您節省寶貴的時間</p>
+            </div>
+            <div class="feature-grid">
+                <!-- Feature 1 -->
+                <div class="feature-card glass-effect scroll-animate">
+                    <div class="feature-icon icon-green">🧾</div>
+                    <h3 class="feature-title">全自動罰單巡檢</h3>
+                    <p class="feature-desc">無須再點進監理網手動輸入個資。我們在背景自動為您巡視是否有最新罰單，讓您不再錯過繳費期限！</p>
+                </div>
+                <!-- Feature 2 -->
+                <div class="feature-card glass-effect scroll-animate delay-1">
+                    <div class="feature-icon icon-blue">🤖</div>
+                    <h3 class="feature-title">AI 智能申訴小幫手</h3>
+                    <p class="feature-desc">上傳罰單照片，系統即刻連線 GPT-4o 視覺大模型，幫您找出「標線不清」、「號誌被擋」等蛛絲馬跡，提供申訴理由草稿。</p>
+                </div>
+                <!-- Feature 3 -->
+                <div class="feature-card glass-effect scroll-animate delay-2">
+                    <div class="feature-icon icon-purple">🛡️</div>
+                    <h3 class="feature-title">智慧突破驗證碼</h3>
+                    <p class="feature-desc">透過 ddddOCR 技術，我們的系統能自動辨識監理網的圖形驗證碼，全程自動化，查詢速度快人一步。</p>
+                </div>
+                <!-- Feature 4 -->
+                <div class="feature-card glass-effect scroll-animate delay-3">
+                    <div class="feature-icon icon-orange">🚗</div>
+                    <h3 class="feature-title">多車輛統一集中管理</h3>
+                    <p class="feature-desc">不管您是擁有多台愛車，還是管理公司營業車、租賃車。都能透過一個 Line 帳號統一管理多張車牌與身分資料。</p>
+                </div>
+            </div>
+        </div>
+    </section>
+
+    <!-- How it works -->
+    <section class="how-it-works" id="how-it-works">
+        <div class="container">
+            <div class="section-header scroll-animate">
+                <h2 class="section-title">簡單 3 步驟，立刻啟動</h2>
+            </div>
+            <div class="steps-container">
+                <div class="step scroll-animate">
+                    <div class="step-num glass-effect">1</div>
+                    <div class="step-content text-center">
+                        <h3>加入 Line 好友</h3>
+                        <p>點擊按鈕，掃描 QR Code 將機器人加入您的 Line 好友清單。</p>
+                    </div>
+                </div>
+                <div class="step-connector scroll-animate"></div>
+                <div class="step scroll-animate delay-1">
+                    <div class="step-num glass-effect">2</div>
+                    <div class="step-content text-center">
+                        <h3>綁定車牌及身分</h3>
+                        <p>依照提示輸入身分證 / 統編，以及愛車車牌或生日進行快速綁定。</p>
+                    </div>
+                </div>
+                <div class="step-connector scroll-animate delay-1"></div>
+                <div class="step scroll-animate delay-2">
+                    <div class="step-num glass-effect">3</div>
+                    <div class="step-content text-center">
+                        <h3>享受全自動通知</h3>
+                        <p>設定排程，接下來交給機器人處理。有罰單或狀況立刻推播給您。</p>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </section>
+
+    <!-- Call to action footer area -->
+    <section class="cta-bottom">
+        <div class="container scroll-animate">
+            <div class="cta-box glass-effect gradient-border">
+                <h2>準備好體驗最新的自動化科技了嗎？</h2>
+                <p>完全免費配置，支援個人與企業車輛管理</p>
+                <div class="mt-4">
+                    <a href="#" class="btn btn-primary btn-lg CTA-button">👉 點我立即加入</a>
+                </div>
+            </div>
+        </div>
+    </section>
+    <section class="faq" id="faq">
+        <div class="container">
+            <div class="section-header scroll-animate">
+                <h2 class="section-title">常見問題</h2>
+                <p class="section-desc">幾個你最常會想問的事情</p>
+            </div>
+
+            <div class="faq-list">
+                <div class="faq-item glass-effect">
+                    <button class="faq-question">
+                        需要提供哪些資料才能查詢？
+                        <span>＋</span>
+                    </button>
+                    <div class="faq-answer">
+                        <p>依照車種與身分不同，可綁定車牌、身分證字號、生日或統編等必要資料。</p>
+                    </div>
+                </div>
+
+                <div class="faq-item glass-effect">
+                    <button class="faq-question">
+                        AI 申訴建議是直接幫我送件嗎？
+                        <span>＋</span>
+                    </button>
+                    <div class="faq-answer">
+                        <p>目前主要提供影像分析與申訴草稿建議，讓你判斷是否值得申訴，再自行送出。</p>
+                    </div>
+                </div>
+
+                <div class="faq-item glass-effect">
+                    <button class="faq-question">
+                        可以管理多台車嗎？
+                        <span>＋</span>
+                    </button>
+                    <div class="faq-answer">
+                        <p>可以，一個 Line 帳號可綁定多台個人車輛，也能延伸到公司用車管理。</p>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </section>
+    <footer class="footer">
+        <div class="container">
+            <p>&copy; 2026 MVDIS Line Bot. All rights reserved.</p>
+            <p class="footer-note">This is a third-party open-source project and is not affiliated with the official MVDIS (Motor Vehicle Driver Information Service).</p>
+        </div>
+    </footer>
+
+    <script src="script.js"></script>
+
+    <div class="modal-overlay" id="lineModal">
+    <div class="modal-box glass-effect">
+        <button class="modal-close" id="closeModal">✕</button>
+        <h3>加入 Line 好友</h3>
+        <p>掃描 QR Code，立即開始使用 MVDIS Bot</p>
+        <div class="qr-placeholder">LINE QR</div>
+        <a href="#" class="btn btn-primary mt-4">開啟 Line 加入</a>
+    </div>
+</div>
+
+</body>
+</html>

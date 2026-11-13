@@ -1,3 +1,7 @@
+import warnings
+
+warnings.filterwarnings("ignore", message=r"urllib3 v2 only supports OpenSSL 1\.1\.1\+")
+
 import time
 import json
 import requests
@@ -14,30 +18,57 @@ from selenium.webdriver.support import expected_conditions as EC
 
 from config import (
     LINE_CHANNEL_ACCESS_TOKEN, IMGBB_API_KEY, 
-    MV_DIS_URL, DEFAULT_HERO_IMAGE, OPENAI_API_KEY, SE_GRID_URL
+    MV_DIS_URL, DEFAULT_HERO_IMAGE, OPENAI_API_KEY, SE_GRID_URL,
+    TAIWANTAXI_DISPATCH_TOKEN, TAIWANTAXI_MEM_SN, TAIWANTAXI_SELECTED_AREAS
 )
 
 CRAWLER_MODE = "local"
 client = openai.OpenAI(api_key=OPENAI_API_KEY) if OPENAI_API_KEY else None
 
-def new_chrome(headless=True) -> webdriver.Chrome:
+def new_chrome(headless=True):
+    """
+    建立瀏覽器實例：支援 Remote (Grid) 與 Local 模式切換
+    """
     options = Options()
+    
+    # 1. 核心穩定性參數
     if headless:
         options.add_argument("--headless=new")
+    
     options.add_argument("--no-sandbox")
-    options.add_argument("--disable-dev-shm-usage")
+    options.add_argument("--disable-dev-shm-usage") # 針對 Docker 記憶體優化
     options.add_argument("--window-size=1920,1080")
     options.add_argument("--disable-gpu")
     options.add_argument("--ignore-certificate-errors")
+    options.add_argument("--disable-blink-features=AutomationControlled") # 避開自動化偵測
     options.add_argument("--user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36")
 
+    # 2. 模式判斷
     if CRAWLER_MODE == "remote" and SE_GRID_URL:
-        print(f"DEBUG: [模式: Remote] 正在連線至 {SE_GRID_URL}")
-        return webdriver.Remote(command_executor=SE_GRID_URL, options=options)
+        print(f"DEBUG: [模式: Remote] 正在連線至 Selenium Grid: {SE_GRID_URL}")
+        try:
+            # 建立連線
+            driver = webdriver.Remote(
+                command_executor=SE_GRID_URL, 
+                options=options
+            )
+            # 設定連線超時，避免網路波動死等
+            driver.set_page_load_timeout(30)
+            return driver
+        except Exception as e:
+            print(f"❌ Remote 連線失敗，請檢查 Docker 狀態: {e}")
+            raise e # 丟給外層 handle_message 處理報錯訊息
 
-    print("DEBUG: [模式: Local] 正在啟動本地瀏覽器")
-    service = Service(ChromeDriverManager().install())
-    return webdriver.Chrome(options=options, service=service)
+    # 3. 本地模式 (僅供測試，不建議生產環境使用)
+    print("DEBUG: [模式: Local] 正在啟動本地瀏覽器...")
+    try:
+            # 💡 完全不傳入 service 參數，讓 Selenium 自己去處理驅動
+            driver = webdriver.Chrome(options=options) 
+            driver.set_page_load_timeout(60)
+            return driver
+    except Exception as e:
+        print(f"❌ Local 瀏覽器啟動失敗: {e}")
+        raise e
 
 def set_crawler_mode(mode: str):
     global CRAWLER_MODE
@@ -131,6 +162,113 @@ def get_new_taipei_photos(tkt_no):
                         base64_list.append(item["fileContents"])
     except Exception as e:
         print(f"新北市照片 API 錯誤: {e}")
+    return base64_list
+
+def get_taoyuan_photos(tkt_no, vil_date, plt_no):
+    """
+    爬取桃園市罰單照片 (D開頭單號)
+    tkt_no: 違規單號
+    vil_date: 違規日期 (格式需為 7 碼，如 1130218)
+    plt_no: 違規車號 (需含 - 符號)
+    """
+    url = "https://trafficphoto.typd.gov.tw/Login"
+    driver = new_chrome() # 使用您現有的初始化瀏覽器函式
+    base64_list = []
+
+    try:
+        driver.get(url)
+        wait = WebDriverWait(driver, 15)
+
+        # 1. 填寫表單資訊
+        print(f"正在填寫桃園查詢表單: {tkt_no}")
+        wait.until(EC.presence_of_element_located((By.ID, "TktNo"))).send_keys(tkt_no)
+        driver.find_element(By.ID, "VilDate").send_keys(vil_date)
+        driver.find_element(By.ID, "PltNo").send_keys(plt_no)
+
+        # 2. 處理驗證碼
+        print("正在辨識桃園驗證碼...")
+        captcha_img = driver.find_element(By.ID, "CaptchaImage")
+        # 滾動到元素位置確保截圖正確
+        driver.execute_script("arguments[0].scrollIntoView({block:'center'});", captcha_img)
+        time.sleep(0.5)
+        
+        captcha_bytes = captcha_img.screenshot_as_png
+        try:
+            ocr = ddddocr.DdddOcr() 
+        except TypeError:
+            ocr = ddddocr.DdddOcr()
+
+        captcha_code = ocr.classification(captcha_bytes)
+        captcha_code = captcha_code.strip().upper()
+        print(f"辨識結果: {captcha_code}")
+        
+        driver.find_element(By.ID, "CaptchaText").send_keys(captcha_code)
+
+        # 3. 送出查詢
+        driver.find_element(By.ID, "SearchBtn").click()
+        try:
+            WebDriverWait(driver, 30).until(
+                lambda d: (
+                    len(d.find_elements(By.ID, "image")) > 0
+                    or "驗證碼錯誤" in d.page_source
+                    or "查無資料" in d.page_source
+                )
+            )
+        except Exception:
+            print("⚠️ 送出查詢後等待逾時，繼續嘗試抓取結果")
+        # 4. 等待結果並抓取照片
+        # 桃園系統通常會先出現縮圖清單 HYIMageRepeater
+        print("等待搜尋結果載入...")
+        try:
+            # 先等待大圖區域出現
+            wait.until(EC.presence_of_element_located((By.ID, "image")))
+            time.sleep(2) # 給予緩衝時間讓縮圖清單渲染
+
+            # 找出所有的縮圖按鈕
+            # 桃園的 ID 格式通常是 HYIMageRepeater_ImageButton_0, _1, ...
+            thumb_selector = "input[id^='HYIMageRepeater_ImageButton_']"
+            thumbnails = driver.find_elements(By.CSS_SELECTOR, thumb_selector)
+            
+            total_pics = len(thumbnails)
+            print(f"偵測到此罰單共有 {total_pics if total_pics > 0 else 1} 張照片")
+
+            if total_pics > 0:
+                # 循環點擊每一張縮圖
+                for i in range(total_pics):
+                    print(f"正在抓取第 {i+1} 張照片...")
+                    
+                    # 重新獲取按鈕列表，避免頁面更新導致 StaleElementReferenceException
+                    current_thumbs = driver.find_elements(By.CSS_SELECTOR, thumb_selector)
+                    
+                    # 點擊縮圖
+                    driver.execute_script("arguments[0].click();", current_thumbs[i])
+                    
+                    # 重要：等待大圖更新 (桃園系統很慢，建議等 1.5 ~ 2 秒)
+                    time.sleep(2)
+                    
+                    # 抓取目前顯示的大圖
+                    target_img = driver.find_element(By.ID, "image")
+                    img_b64 = target_img.screenshot_as_base64
+                    base64_list.append(img_b64)
+            else:
+                # 如果沒有縮圖清單，代表只有一張照片，直接抓
+                print("僅有一張照片，直接抓取...")
+                target_img = driver.find_element(By.ID, "image")
+                base64_list.append(target_img.screenshot_as_base64)
+
+            print(f"✅ 桃園照片抓取完成，共取得 {len(base64_list)} 張")
+
+        except Exception as e:
+            if "查無資料" in driver.page_source:
+                print("✅ 桃園系統回報：查無此照片資料")
+            else:
+                print(f"❌ 桃園照片區域載入失敗: {e}")
+
+    except Exception as e:
+        print(f"❌ 桃園爬蟲出錯: {e}")
+    finally:
+        driver.quit()
+    
     return base64_list
 
 def get_captcha_and_solve(driver: webdriver.Chrome, mode: str) -> str:
@@ -269,7 +407,7 @@ def get_all_pages_data(driver: webdriver.Chrome):
 
 def crawl_plate_numbers():
     print("🚀 啟動選號爬蟲...")
-    driver = new_chrome(headless=True)
+    driver = new_chrome()
     plates = []
     url = "https://www.mvdis.gov.tw/m3-emv-plate/webpickno/queryPickNo#"
 
@@ -418,3 +556,26 @@ def get_ai_appeal_advice(tkt_no, fact, image_url):
     except Exception as e:
         print(f"AI 分析失敗: {e}")
         return "抱歉大哥，AI 目前忙碌中，請稍後再試。"
+
+def get_55688_reservation():
+    """取得 55688 預約掛號資訊"""
+    if not TAIWANTAXI_DISPATCH_TOKEN:
+        raise RuntimeError("缺少 TAIWANTAXI_DISPATCH_TOKEN")
+
+    url = "https://dispatchapi.taiwantaxi.com.tw/api/Reservation/GetReservationJobV2"
+
+    payload = {
+        "memSN": TAIWANTAXI_MEM_SN,
+        "iveSelectedArea": TAIWANTAXI_SELECTED_AREAS,
+    }
+    headers = {
+        'Content-Type': 'application/json',
+        'Accept': '*/*',
+        'User-Agent': 'v8/3.2.62 (tw.com.taiwantaxi.driver; build:20260629143002; iOS 27.0.0) Alamofire/5.10.2',
+        'Accept-Language': 'zh-Hant-TW;q=1.0',
+        'DispatchToken': TAIWANTAXI_DISPATCH_TOKEN,
+    }
+
+    response = requests.post(url, headers=headers, json=payload, timeout=20)
+    response.raise_for_status()
+    return response.json()

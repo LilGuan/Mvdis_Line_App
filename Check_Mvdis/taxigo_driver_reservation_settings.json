@@ -1,0 +1,7 @@
+{
+  "active": false,
+  "min_fare": 800,
+  "airport_only": true,
+  "frequency_min_sec": 50,
+  "frequency_max_sec": 70
+}
